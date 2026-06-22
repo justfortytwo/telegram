@@ -1,11 +1,11 @@
 import { existsSync, readFileSync } from 'node:fs';
 
-// TODO(extract): the monolith parsed config/adapters.toml with `parseToml` from
+// TODO(wire): the monolith parsed config/adapters.toml with `parseToml` from
 // services/memory-mcp/src/gate.ts (gate-owned). That parser belongs to the
-// sibling @justfortytwo/gate package, not here. Rather than copy it, we accept
+// sibling @justfortytwo/vogon package, not here. Rather than copy it, we accept
 // an injectable parser and ship a tiny flat-table fallback so this package can
 // load its own adapter manifest standalone. On reconciliation, prefer:
-//   import { parseToml } from '@justfortytwo/gate';
+//   import { parseToml } from '@justfortytwo/vogon';
 // and pass it in (or set it as the default) so behavior matches the gate exactly.
 
 export interface AdaptersConfig {

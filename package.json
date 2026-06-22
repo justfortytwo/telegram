@@ -1,5 +1,5 @@
 {
-  "name": "@justfortytwo/telegram",
+  "name": "@justfortytwo/babelfish",
   "version": "0.1.0",
   "description": "Telegram channel adapter for justfortytwo: a long-polling bridge that drives a headless `claude` turn loop per chat, surfaces gate approvals as inline keyboards, and gates inbound access behind a login/pairing binding flow.",
   "license": "MIT",
@@ -39,8 +39,8 @@
     "login"
   ],
   "peerDependencies": {
-    "@justfortytwo/memory": "^0.1.0",
-    "@justfortytwo/gate": "^0.1.0"
+    "@justfortytwo/guide": "^0.1.0",
+    "@justfortytwo/vogon": "^0.1.0"
   },
   "dependencies": {
     "better-sqlite3": "^11.0.0"

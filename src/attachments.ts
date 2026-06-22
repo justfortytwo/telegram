@@ -1,12 +1,10 @@
 import { createHash } from 'node:crypto';
-// TODO(extract): SourceKind / SourceEnvelope / createSourceEnvelope are the
-// provenance-envelope primitives owned by the gate/memory side (originally
-// fortytwo/services/memory-mcp/src/policy.ts). They belong to a sibling package,
-// NOT here. Once the gate package re-exports them, replace this local shim with:
-//   import { createSourceEnvelope, type SourceEnvelope, type SourceKind } from '@justfortytwo/gate';
-// For now we declare a minimal local shim so the attachment owner code compiles
-// in isolation. The shape MUST match the gate contract on reconciliation.
-import { createSourceEnvelope, type SourceEnvelope, type SourceKind } from './_peer-policy-shim.js';
+// TODO(wire): SourceKind / SourceEnvelope / createSourceEnvelope are the
+// provenance-envelope primitives owned by the safety gate (@justfortytwo/vogon),
+// a peer package — NOT this one. vogon's SourceKind is a host-agnostic union that
+// allows a channel to map its own kinds in as plain strings, which is how the
+// telegram_* kinds below flow through.
+import { createSourceEnvelope, type SourceEnvelope, type SourceKind } from '@justfortytwo/vogon';
 
 export type AttachmentKind = 'image' | 'document' | 'audio' | 'other';
 
@@ -58,7 +56,8 @@ function sha256Bytes(bytes: Uint8Array): string {
 export function buildAttachment(args: {
   bytes: Uint8Array;
   mime: string;
-  sourceKind: SourceKind;
+  // vogon's SourceKind union | a channel-specific string (e.g. telegram_photo).
+  sourceKind: SourceKind | string;
   storageRef: string;
   channel: string;
   actor?: string;

@@ -1,4 +1,4 @@
-# @justfortytwo/telegram
+# @justfortytwo/babelfish
 
 The **Telegram channel adapter** for [justfortytwo](https://github.com/justfortytwo) — a
 standalone, always-on **bridge** that connects a Telegram bot to a headless
@@ -45,8 +45,8 @@ The contract is intentionally **channel-agnostic** (`ChannelAdapter` in
 
 ### Binding store
 
-Authorization must work **even when the memory package is absent**, so the
-binding store is **self-owned** and does not assume the `@justfortytwo/memory`
+Authorization must work **even when the guide package is absent**, so the
+binding store is **self-owned** and does not assume the `@justfortytwo/guide`
 sqlite db exists:
 
 - `SqliteBindingStore` — default; a tiny `better-sqlite3` table in its own db
@@ -66,18 +66,18 @@ bundled:
 
 | Peer | Used for | Contract |
 | --- | --- | --- |
-| `@justfortytwo/memory` | Journaling, jobs, pending-decision records, embeddings | `MEMORY_TOOL_CONTRACT_VERSION` (tools `mcp__fortytwo-memory__*`) |
-| `@justfortytwo/gate` | Bash exact-command allowlist behind "Allow _N_h"; provenance envelopes | `POLICY_SCHEMA_VERSION` |
+| `@justfortytwo/guide` | Memory store, jobs, pending-decision records, embeddings | `GUIDE_TOOL_CONTRACT_VERSION` (tools `mcp__fortytwo-guide__*`) |
+| `@justfortytwo/vogon` | Bash exact-command allowlist behind "Allow _N_h"; provenance envelopes | `POLICY_SCHEMA_VERSION` |
 
 Install them alongside this package:
 
 ```sh
-npm install @justfortytwo/telegram @justfortytwo/memory @justfortytwo/gate
+npm install @justfortytwo/babelfish @justfortytwo/guide @justfortytwo/vogon
 ```
 
-The seams where these peers are wired are marked with `// TODO(extract):` in
+The seams where these peers are wired are marked with `// TODO(wire):` in
 `src/bridge.ts`, `src/attachments.ts`, and `src/adapters-config.ts`. Until they
-are wired, the bridge runs **channel-only** (no journaling/jobs) via no-op shims.
+are wired, the bridge runs **channel-only** (no memory/jobs) via no-op shims.
 
 ## Environment
 
@@ -107,8 +107,8 @@ crashes. Example launcher (adapted from the monolith's `wakeup.sh`):
 ```sh
 set -a; source .env; set +a
 while true; do
-  node node_modules/@justfortytwo/telegram/dist/bridge.js
-  echo "[telegram] bridge exited (rc=$?) — restarting in 3s"; sleep 3
+  node node_modules/@justfortytwo/babelfish/dist/bridge.js
+  echo "[babelfish] bridge exited (rc=$?) — restarting in 3s"; sleep 3
 done
 ```
 
