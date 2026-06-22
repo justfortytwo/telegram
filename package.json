@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "description": "Telegram channel adapter for justfortytwo: a long-polling bridge that drives a headless `claude` turn loop per chat, surfaces gate approvals as inline keyboards, and gates inbound access behind a login/pairing binding flow.",
   "license": "MIT",
+  "author": { "name": "Enrico Deleo", "url": "https://enricodeleo.com" },
   "type": "module",
   "engines": {
     "node": ">=18"

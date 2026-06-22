@@ -115,3 +115,7 @@ done
 ## License
 
 MIT © 2026 justfortytwo
+
+---
+
+Created and maintained by [**Enrico Deleo**](https://enricodeleo.com).
