@@ -1,0 +1,54 @@
+{
+  "name": "@justfortytwo/telegram",
+  "version": "0.1.0",
+  "description": "Telegram channel adapter for justfortytwo: a long-polling bridge that drives a headless `claude` turn loop per chat, surfaces gate approvals as inline keyboards, and gates inbound access behind a login/pairing binding flow.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./bridge": "./dist/bridge.js"
+  },
+  "bin": {
+    "justfortytwo-telegram-bridge": "./dist/bridge.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest"
+  },
+  "keywords": [
+    "claude-code",
+    "telegram",
+    "channel-adapter",
+    "bridge",
+    "agent",
+    "bot",
+    "pairing",
+    "login"
+  ],
+  "peerDependencies": {
+    "@justfortytwo/memory": "^0.1.0",
+    "@justfortytwo/gate": "^0.1.0"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.0.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.0",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.4.0",
+    "vitest": "^1.6.0"
+  }
+}
