@@ -1,6 +1,6 @@
 // @justfortytwo/babelfish — public API.
 //
-// The Telegram channel adapter for justfortytwo: a long-polling bridge that
+// The Telegram channel adapter for fortytwo: a long-polling bridge that
 // drives a headless `claude` turn loop per chat, surfaces gate approvals as
 // inline keyboards, and gates inbound access behind a login/pairing binding flow.
 //

@@ -10,7 +10,7 @@
 //      tiny db file, default ./telegram-bindings.db) used by default.
 //   3. `MemoryBindingStore` — an in-process Map store for tests / ephemeral use.
 //
-// If/when justfortytwo standardizes a shared identity table, swap the default
+// If/when fortytwo standardizes a shared identity table, swap the default
 // for a memory-backed BindingStore — the login flow is unaffected.
 
 import { createRequire } from 'node:module';

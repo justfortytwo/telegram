@@ -1,6 +1,6 @@
 # @justfortytwo/babelfish
 
-The **Telegram channel adapter** for [justfortytwo](https://github.com/justfortytwo) — a
+The **Telegram channel adapter** for [fortytwo](https://github.com/justfortytwo) — a
 standalone, always-on **bridge** that connects a Telegram bot to a headless
 [`claude`](https://docs.claude.com/en/docs/claude-code) turn loop.
 
@@ -55,7 +55,7 @@ sqlite db exists:
 - `BindingStore` — the injectable interface. Supply a memory-backed
   implementation later without touching the login flow.
 
-> Cross-repo reconciliation: if justfortytwo standardizes a shared identity
+> Cross-repo reconciliation: if fortytwo standardizes a shared identity
 > table, swap the default store for a memory-backed `BindingStore`. The login
 > flow is unaffected.
 
@@ -114,7 +114,7 @@ done
 
 ## License
 
-MIT © 2026 justfortytwo
+MIT © 2026 Enrico Deleo
 
 ---
 
