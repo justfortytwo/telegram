@@ -42,6 +42,10 @@
     "@justfortytwo/guide": "^0.1.0",
     "@justfortytwo/vogon": "^0.1.0"
   },
+  "peerDependenciesMeta": {
+    "@justfortytwo/guide": { "optional": true },
+    "@justfortytwo/vogon": { "optional": true }
+  },
   "dependencies": {
     "better-sqlite3": "^11.0.0"
   },
