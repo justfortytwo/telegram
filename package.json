@@ -1,11 +1,11 @@
 {
-  "name": "@justfortytwo/babelfish",
+  "name": "@justfortytwo/telegram",
   "version": "0.1.0",
   "description": "Telegram channel adapter for fortytwo: a long-polling bridge that drives a headless `claude` turn loop per chat, surfaces gate approvals as inline keyboards, and gates inbound access behind a login/pairing binding flow.",
   "license": "MIT",
   "author": { "name": "Enrico Deleo", "url": "https://enricodeleo.com" },
   "homepage": "https://forty-two.it",
-  "repository": { "type": "git", "url": "git+https://github.com/justfortytwo/babelfish.git" },
+  "repository": { "type": "git", "url": "git+https://github.com/justfortytwo/telegram.git" },
   "type": "module",
   "engines": {
     "node": ">=18"
@@ -42,12 +42,12 @@
     "login"
   ],
   "peerDependencies": {
-    "@justfortytwo/guide": "^0.1.0",
-    "@justfortytwo/vogon": "^0.1.0"
+    "@justfortytwo/memory": "^0.1.0",
+    "@justfortytwo/gate": "^0.1.0"
   },
   "peerDependenciesMeta": {
-    "@justfortytwo/guide": { "optional": true },
-    "@justfortytwo/vogon": { "optional": true }
+    "@justfortytwo/memory": { "optional": true },
+    "@justfortytwo/gate": { "optional": true }
   },
   "dependencies": {
     "better-sqlite3": "^11.0.0"

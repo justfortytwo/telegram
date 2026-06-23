@@ -107,7 +107,7 @@ export class Telegram {
    * True if the chat is on the static bootstrap allowlist (ALLOWED_CHAT_IDS).
    *
    * NOTE (post-extraction): in the monolith this was the sole authorization
-   * check (lockdown). In @justfortytwo/babelfish, authorization is owned by the
+   * check (lockdown). In @justfortytwo/telegram, authorization is owned by the
    * login/binding flow (see src/login.ts `authorize`). This allowlist is now a
    * BOOTSTRAP set unioned with persisted bindings, not the only gate. The poller
    * no longer hard-filters on it; see the bridge poll loop.

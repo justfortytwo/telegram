@@ -1,12 +1,12 @@
-// @justfortytwo/babelfish — public API.
+// @justfortytwo/telegram — public API.
 //
 // The Telegram channel adapter for fortytwo: a long-polling bridge that
 // drives a headless `claude` turn loop per chat, surfaces gate approvals as
 // inline keyboards, and gates inbound access behind a login/pairing binding flow.
 //
 // Peer packages (declared in peerDependencies, NOT bundled):
-//   - @justfortytwo/guide  (GUIDE_TOOL_CONTRACT_VERSION, tools mcp__fortytwo-guide__*)
-//   - @justfortytwo/vogon  (POLICY_SCHEMA_VERSION)
+//   - @justfortytwo/memory  (MEMORY_TOOL_CONTRACT_VERSION, tools mcp__fortytwo-memory__*)
+//   - @justfortytwo/gate  (POLICY_SCHEMA_VERSION)
 // See src/bridge.ts for the `// TODO(wire):` seams where these are wired.
 
 // --- Channel transport (owned) ---
@@ -25,7 +25,7 @@ export {
   type ApprovalKeyboardOptions,
 } from './telegram.js';
 
-// --- Attachments (owned; depends on @justfortytwo/vogon's provenance contract) ---
+// --- Attachments (owned; depends on @justfortytwo/gate's provenance contract) ---
 export {
   buildAttachment,
   kindFromMime,

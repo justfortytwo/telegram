@@ -1,10 +1,10 @@
 import { createHash } from 'node:crypto';
 // TODO(wire): SourceKind / SourceEnvelope / createSourceEnvelope are the
-// provenance-envelope primitives owned by the safety gate (@justfortytwo/vogon),
-// a peer package — NOT this one. vogon's SourceKind is a host-agnostic union that
+// provenance-envelope primitives owned by the safety gate (@justfortytwo/gate),
+// a peer package — NOT this one. gate's SourceKind is a host-agnostic union that
 // allows a channel to map its own kinds in as plain strings, which is how the
 // telegram_* kinds below flow through.
-import { createSourceEnvelope, type SourceEnvelope, type SourceKind } from '@justfortytwo/vogon';
+import { createSourceEnvelope, type SourceEnvelope, type SourceKind } from '@justfortytwo/gate';
 
 export type AttachmentKind = 'image' | 'document' | 'audio' | 'other';
 
@@ -56,7 +56,7 @@ function sha256Bytes(bytes: Uint8Array): string {
 export function buildAttachment(args: {
   bytes: Uint8Array;
   mime: string;
-  // vogon's SourceKind union | a channel-specific string (e.g. telegram_photo).
+  // gate's SourceKind union | a channel-specific string (e.g. telegram_photo).
   sourceKind: SourceKind | string;
   storageRef: string;
   channel: string;

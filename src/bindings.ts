@@ -1,8 +1,8 @@
 // Binding store: persists (channelType, channelUserId) -> owner.
 //
 // DESIGN DECISION (cross-repo reconciliation point): the telegram adapter must
-// NOT assume the @justfortytwo/guide sqlite db exists. Authorization is the
-// channel's own concern and must work even when guide is absent. So this file
+// NOT assume the @justfortytwo/memory sqlite db exists. Authorization is the
+// channel's own concern and must work even when memory is absent. So this file
 // defines:
 //   1. `BindingStore` — an injectable interface (the seam). Anyone can supply a
 //      memory-backed implementation later without changing the login flow.

@@ -10,11 +10,11 @@
 //   3. Proactive wakes (scheduler): invoke `claude -p` at the spec's cron times.
 //
 // CROSS-PACKAGE NOTE: this bridge orchestrates two PEER packages —
-//   - @justfortytwo/guide : memory store, jobs, pending-decision records, embeds.
-//   - @justfortytwo/vogon : the bash exact-allowlist that backs "Allow Nh".
+//   - @justfortytwo/memory : memory store, jobs, pending-decision records, embeds.
+//   - @justfortytwo/gate : the bash exact-allowlist that backs "Allow Nh".
 // Their imports below are STUBBED with `// TODO(wire):` markers. We do not
 // copy their code; we declare them as peerDependencies and reference the
-// contract names (GUIDE_TOOL_CONTRACT_VERSION, POLICY_SCHEMA_VERSION).
+// contract names (MEMORY_TOOL_CONTRACT_VERSION, POLICY_SCHEMA_VERSION).
 
 import { spawn } from 'node:child_process';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
@@ -27,56 +27,56 @@ import { loadAdaptersConfig } from './adapters-config.js';
 import { TelegramAdapter } from './adapter.js';
 import { SqliteBindingStore, type BindingStore } from './bindings.js';
 import { handleAuthCommand, isAuthorized, isAuthCommand, type AuthContext } from './login.js';
-import type { SourceKind } from '@justfortytwo/vogon'; // TODO(wire): peer — provenance SourceKind
+import type { SourceKind } from '@justfortytwo/gate'; // TODO(wire): peer — provenance SourceKind
 
 // ---------------------------------------------------------------------------
 // PEER PACKAGE SEAMS — stubbed. Replace each block with the real peer import.
 // ---------------------------------------------------------------------------
 
-// TODO(wire): from '@justfortytwo/guide'
+// TODO(wire): from '@justfortytwo/memory'
 //   import {
 //     openDb, runMigrations, FakeEmbedder, OllamaEmbedder,
 //     store, recall, query,
-//     GUIDE_TOOL_CONTRACT_VERSION,
+//     MEMORY_TOOL_CONTRACT_VERSION,
 //     type DbHandles, type Embedder, type MemoryInput,
-//   } from '@justfortytwo/guide';
-// guide exposes a GENERIC tool surface (store/query/recall/…); the old Ford
-// `logEntry`/`log_entry` tool maps onto guide's `store` (peer tool
-// `mcp__fortytwo-guide__store`) — content + free-form provenance, not a
+//   } from '@justfortytwo/memory';
+// memory exposes a GENERIC tool surface (store/query/recall/…); the original assistant
+// `logEntry`/`log_entry` tool maps onto memory's `store` (peer tool
+// `mcp__fortytwo-memory__store`) — content + free-form provenance, not a
 // Journal-specific row. These no-op shims let the bridge run channel-only (no
-// memory) until the guide peer is wired.
+// memory) until the memory peer is wired.
 type DbHandles = unknown;
 type Embedder = unknown;
-// Channel-event shape the bridge carries; mapped onto guide's generic store input
+// Channel-event shape the bridge carries; mapped onto memory's generic store input
 // (channel/direction/actor/kind collapse into `source` + structured `meta`).
 interface ChannelEvent {
   channel: string; direction: string; actor: string; kind: string; content: string;
   meta?: Record<string, unknown>; thread_id?: string | null; approval_status?: string | null;
 }
 async function store(_h: DbHandles, _e: Embedder, _entry: ChannelEvent): Promise<number> {
-  // TODO(wire): @justfortytwo/guide `store` (mcp__fortytwo-guide__store) — persist
+  // TODO(wire): @justfortytwo/memory `store` (mcp__fortytwo-memory__store) — persist
   //   the channel event as a memory with provenance (source=channel/actor, meta=rest).
   return 0;
 }
 async function addJob(_h: DbHandles, _item: unknown): Promise<number> {
-  // TODO(wire): @justfortytwo/guide job enqueue — reembed/pulse jobs.
+  // TODO(wire): @justfortytwo/memory job enqueue — reembed/pulse jobs.
   return 0;
 }
 async function setPendingDecisionByToolUseId(_h: DbHandles, _tuid: string, _status: string, _by: string): Promise<void> {
-  // TODO(wire): @justfortytwo/guide — record the approval outcome on the pending decision.
+  // TODO(wire): @justfortytwo/memory — record the approval outcome on the pending decision.
 }
 
-// TODO(wire): from '@justfortytwo/vogon'
-//   import { appendExactBashAllowlistEntry, bashAllowlistPath, DEFAULT_BASH_ALLOW_TTL_HOURS, POLICY_SCHEMA_VERSION } from '@justfortytwo/vogon';
+// TODO(wire): from '@justfortytwo/gate'
+//   import { appendExactBashAllowlistEntry, bashAllowlistPath, DEFAULT_BASH_ALLOW_TTL_HOURS, POLICY_SCHEMA_VERSION } from '@justfortytwo/gate';
 const DEFAULT_BASH_ALLOW_TTL_HOURS = 8;
 function bashAllowlistPath(root: string): string {
-  // TODO(wire): @justfortytwo/vogon owns the canonical allowlist path.
+  // TODO(wire): @justfortytwo/gate owns the canonical allowlist path.
   return resolve(root, 'config', 'bash-allowlist.jsonl');
 }
 function appendExactBashAllowlistEntry(_args: {
   filePath: string; command: string; cwd: string; approvedBy: string; ttlHours: number; sourceToolUseId: string;
 }): { command_glob: string; cwd_glob: string; expires_at: string } {
-  // TODO(wire): @justfortytwo/vogon appendExactBashAllowlistEntry — persist a TTL'd exact-command allow.
+  // TODO(wire): @justfortytwo/gate appendExactBashAllowlistEntry — persist a TTL'd exact-command allow.
   return { command_glob: _args.command, cwd_glob: _args.cwd, expires_at: new Date(Date.now() + _args.ttlHours * 3600_000).toISOString() };
 }
 
@@ -286,10 +286,10 @@ function runClaude(prompt: string, sessionId?: string): Promise<any> {
 // --- I/O glue ---
 
 async function logBridgeEntry(h: DbHandles, embedder: Embedder, entry: ChannelEvent): Promise<number> {
-  // TODO(wire): @justfortytwo/guide `store` (mcp__fortytwo-guide__store) — the
-  //   generic memory write that replaces Ford's old logEntry/log_entry tool.
+  // TODO(wire): @justfortytwo/memory `store` (mcp__fortytwo-memory__store) — the
+  //   generic memory write that replaces the original assistant's old logEntry/log_entry tool.
   const id = await store(h, embedder, entry);
-  // TODO(wire): @justfortytwo/guide job kind 'reembed_memory'.
+  // TODO(wire): @justfortytwo/memory job kind 'reembed_memory'.
   await addJob(h, { kind: 'reembed_memory', payload: { memory_id: id }, max_attempts: 5 });
   return id;
 }
@@ -413,7 +413,7 @@ async function handleCallback(tg: Telegram, state: BridgeState, h: DbHandles, em
     if (action === 'approve_ttl') {
       const command = pending.toolName === 'Bash' && typeof pending.input?.command === 'string' ? pending.input.command : null;
       if (command) {
-        // TODO(wire): @justfortytwo/vogon owns the exact-command bash allowlist.
+        // TODO(wire): @justfortytwo/gate owns the exact-command bash allowlist.
         const entry = appendExactBashAllowlistEntry({
           filePath: BASH_ALLOWLIST, command, cwd: ROOT, approvedBy: OWNER_ACTOR,
           ttlHours: BASH_ALLOW_TTL_HOURS, sourceToolUseId: tuid,
@@ -431,7 +431,7 @@ async function handleCallback(tg: Telegram, state: BridgeState, h: DbHandles, em
     }
 
     console.log(`[bridge] chat ${chatId}: approved ${tuid} (${action})`);
-    // TODO(wire): @justfortytwo/guide records the approval outcome on the pending decision.
+    // TODO(wire): @justfortytwo/memory records the approval outcome on the pending decision.
     await setPendingDecisionByToolUseId(h, tuid, 'approved', OWNER_ACTOR);
     delete state.pending[chatId];
     await tg.answerCallbackQuery(cbId, statusText).catch(() => {});
@@ -525,7 +525,7 @@ async function main(): Promise<void> {
   // no response and can only earn access via /login <code>. Starting with an empty
   // bootstrap is allowed only if at least one binding already exists.
 
-  // Self-owned binding store (does not require @justfortytwo/guide's db).
+  // Self-owned binding store (does not require @justfortytwo/memory's db).
   mkdirSync(dirname(BINDINGS_DB_PATH), { recursive: true });
   const store: BindingStore = new SqliteBindingStore(BINDINGS_DB_PATH);
   const adapter = new TelegramAdapter(store);
@@ -537,13 +537,13 @@ async function main(): Promise<void> {
   }
   const ownerChatId = bootstrap.size ? [...bootstrap][0] : Number(store.list('telegram')[0].channelUserId);
 
-  // TODO(wire): wire @justfortytwo/guide here —
+  // TODO(wire): wire @justfortytwo/memory here —
   //   const h = openDb(DB_PATH); await runMigrations(h.k);
   //   const embedder = new FakeEmbedder();
   //   const jobEmbedder = EMBED_MODEL ? new OllamaEmbedder(EMBED_MODEL, OLLAMA_BASE_URL) : null;
   //   await ensurePulseScheduled(h); void jobLoop(h, jobEmbedder);
-  const h: DbHandles = null;       // STUB until guide peer is wired
-  const embedder: Embedder = null; // STUB until guide peer is wired
+  const h: DbHandles = null;       // STUB until memory peer is wired
+  const embedder: Embedder = null; // STUB until memory peer is wired
 
   const tg = new Telegram(token, bootstrap);
   const state = loadState();
