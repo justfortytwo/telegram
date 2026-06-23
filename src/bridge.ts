@@ -27,43 +27,100 @@ import { loadAdaptersConfig } from './adapters-config.js';
 import { TelegramAdapter } from './adapter.js';
 import { SqliteBindingStore, type BindingStore } from './bindings.js';
 import { handleAuthCommand, isAuthorized, isAuthCommand, type AuthContext } from './login.js';
-import type { SourceKind } from '@justfortytwo/gate'; // TODO(wire): peer — provenance SourceKind
+import type { SourceKind } from '@justfortytwo/gate'; // peer — provenance SourceKind
+import type { DbHandles as MemDbHandles, Embedder as MemEmbedder, MemoryInput } from '@justfortytwo/memory';
 
 // ---------------------------------------------------------------------------
 // PEER PACKAGE SEAMS — stubbed. Replace each block with the real peer import.
 // ---------------------------------------------------------------------------
 
-// TODO(wire): from '@justfortytwo/memory'
-//   import {
-//     openDb, runMigrations, FakeEmbedder, OllamaEmbedder,
-//     store, recall, query,
-//     MEMORY_TOOL_CONTRACT_VERSION,
-//     type DbHandles, type Embedder, type MemoryInput,
-//   } from '@justfortytwo/memory';
-// memory exposes a GENERIC tool surface (store/query/recall/…); the original assistant
-// `logEntry`/`log_entry` tool maps onto memory's `store` (peer tool
-// `mcp__fortytwo-memory__store`) — content + free-form provenance, not a
-// Journal-specific row. These no-op shims let the bridge run channel-only (no
-// memory) until the memory peer is wired.
-type DbHandles = unknown;
-type Embedder = unknown;
+// @justfortytwo/memory is an OPTIONAL peer. The bridge PERSISTS channel events
+// to the memory store (so they are recallable later); the assistant RECALLS
+// during its headless turn via the Memory MCP tools, not here. memory embeds
+// inline on `store`, so there is no separate reembed job. When memory is absent
+// or fails to open, the bridge runs CHANNEL-ONLY (relays messages but does not
+// persist them) rather than refusing to start.
+type DbHandles = MemDbHandles | null;
+type Embedder = MemEmbedder | null;
+
 // Channel-event shape the bridge carries; mapped onto memory's generic store input
 // (channel/direction/actor/kind collapse into `source` + structured `meta`).
 interface ChannelEvent {
   channel: string; direction: string; actor: string; kind: string; content: string;
   meta?: Record<string, unknown>; thread_id?: string | null; approval_status?: string | null;
 }
-async function store(_h: DbHandles, _e: Embedder, _entry: ChannelEvent): Promise<number> {
-  // TODO(wire): @justfortytwo/memory `store` (mcp__fortytwo-memory__store) — persist
-  //   the channel event as a memory with provenance (source=channel/actor, meta=rest).
-  return 0;
+
+/** Map a channel event onto memory's generic MemoryInput (content + provenance). */
+export function mapChannelEventToMemoryInput(entry: ChannelEvent): MemoryInput {
+  const meta: Record<string, unknown> = {
+    ...(entry.meta ?? {}), direction: entry.direction, kind: entry.kind, actor: entry.actor,
+  };
+  if (entry.thread_id != null) meta.thread_id = entry.thread_id;
+  if (entry.approval_status != null) meta.approval_status = entry.approval_status;
+  return {
+    content: entry.content,
+    source: `${entry.channel}:${entry.actor}`,
+    observed: 'stated',
+    tags: [entry.channel, entry.direction, entry.kind],
+    meta,
+  };
+}
+
+// memory.store, captured by loadMemoryEngine when the peer is present.
+let memStore: ((h: MemDbHandles, e: MemEmbedder, m: MemoryInput) => Promise<number>) | null = null;
+
+/**
+ * Load the optional memory engine: open + migrate the DB and build an embedder
+ * (Ollama when EMBED_MODEL is set, else a deterministic fake). Returns null
+ * handles when memory is not installed or fails to open — the bridge then runs
+ * channel-only rather than refusing to start.
+ */
+async function loadMemoryEngine(dbPath: string): Promise<{ h: DbHandles; embedder: Embedder }> {
+  type MemModule = {
+    openDb: (p: string) => MemDbHandles & { k: unknown };
+    runMigrations: (k: unknown) => Promise<void>;
+    store: (h: MemDbHandles, e: MemEmbedder, m: MemoryInput) => Promise<number>;
+    FakeEmbedder: new () => MemEmbedder;
+    OllamaEmbedder: new (model: string, baseUrl?: string) => MemEmbedder;
+  };
+  let mod: MemModule;
+  try {
+    mod = (await import('@justfortytwo/memory')) as unknown as MemModule;
+  } catch {
+    console.error('[bridge] @justfortytwo/memory not installed — channel-only; messages will NOT be persisted/recallable.');
+    return { h: null, embedder: null };
+  }
+  try {
+    mkdirSync(dirname(resolve(dbPath)), { recursive: true });
+    const h = mod.openDb(dbPath);
+    await mod.runMigrations(h.k);
+    const embedModel = process.env.EMBED_MODEL;
+    const embedder: MemEmbedder = embedModel
+      ? new mod.OllamaEmbedder(embedModel, process.env.OLLAMA_BASE_URL)
+      : new mod.FakeEmbedder();
+    memStore = mod.store;
+    console.log(`[bridge] memory wired (db=${dbPath}, embedder=${embedModel ? 'ollama:' + embedModel : 'fake'}).`);
+    return { h, embedder };
+  } catch (e: unknown) {
+    console.error(`[bridge] memory wiring failed (${(e as Error)?.message}) — channel-only.`);
+    return { h: null, embedder: null };
+  }
+}
+
+async function store(h: DbHandles, e: Embedder, entry: ChannelEvent): Promise<number> {
+  if (!h || !e || !memStore) return 0; // channel-only mode
+  return memStore(h, e, mapChannelEventToMemoryInput(entry));
 }
 async function addJob(_h: DbHandles, _item: unknown): Promise<number> {
-  // TODO(wire): @justfortytwo/memory job enqueue — reembed/pulse jobs.
+  // No-op: the standalone memory server embeds inline on `store`, so there is no
+  // separate reembed job, and the deferred-jobs runner was left out of memory's scope.
   return 0;
 }
 async function setPendingDecisionByToolUseId(_h: DbHandles, _tuid: string, _status: string, _by: string): Promise<void> {
-  // TODO(wire): @justfortytwo/memory — record the approval outcome on the pending decision.
+  // Best-effort no-op: the authoritative one-shot approval lives in the gate's
+  // store and is consumed when the headless turn re-fires the deferred call; the
+  // bridge already journals the owner's tap (logBridgeEntry above). A durable
+  // cross-process decision record is a future enhancement.
 }
 
 // TODO(wire): from '@justfortytwo/gate'
@@ -537,13 +594,9 @@ async function main(): Promise<void> {
   }
   const ownerChatId = bootstrap.size ? [...bootstrap][0] : Number(store.list('telegram')[0].channelUserId);
 
-  // TODO(wire): wire @justfortytwo/memory here —
-  //   const h = openDb(DB_PATH); await runMigrations(h.k);
-  //   const embedder = new FakeEmbedder();
-  //   const jobEmbedder = EMBED_MODEL ? new OllamaEmbedder(EMBED_MODEL, OLLAMA_BASE_URL) : null;
-  //   await ensurePulseScheduled(h); void jobLoop(h, jobEmbedder);
-  const h: DbHandles = null;       // STUB until memory peer is wired
-  const embedder: Embedder = null; // STUB until memory peer is wired
+  // Persist channel events to the memory store (optional peer; channel-only if absent).
+  const dbPath = process.env.DB_PATH ? resolve(ROOT, process.env.DB_PATH) : resolve(ROOT, 'db', 'fortytwo.db');
+  const { h, embedder } = await loadMemoryEngine(dbPath);
 
   const tg = new Telegram(token, bootstrap);
   const state = loadState();
