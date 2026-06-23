@@ -57,6 +57,48 @@ describe('login / pairing binding flow', () => {
   });
 });
 
+describe('login / pairing — security hardening', () => {
+  it('a group chat id (negative) is never authorized and cannot pair', () => {
+    const { auth, adapter } = ctx();
+    const { code } = adapter.issueChallenge('owner');
+    expect(isAuthorized(auth, -100123)).toBe(false);
+    expect(handleAuthCommand(auth, -100123, `/login ${code}`)).toEqual({ kind: 'ignore' });
+    expect(isAuthorized(auth, -100123)).toBe(false);
+    // the group attempt did NOT consume the code — a real private chat still can
+    expect(handleAuthCommand(auth, 42, `/login ${code}`).kind).toBe('login_ok');
+  });
+
+  it('a bound chat cannot re-point its binding with a fresh code (no reassignment)', () => {
+    const { auth, adapter } = ctx();
+    expect(handleAuthCommand(auth, 7, `/login ${adapter.issueChallenge('alice').code}`).kind).toBe('login_ok');
+    expect(adapter.bindingFor('7')?.owner).toBe('alice');
+    const bobCode = adapter.issueChallenge('bob').code;             // a code for bob
+    expect(handleAuthCommand(auth, 7, `/login ${bobCode}`).kind).toBe('login_failed'); // refused
+    expect(adapter.bindingFor('7')?.owner).toBe('alice');           // owner unchanged
+    // bob's code was NOT consumed by the reassignment attempt — bob's real chat can use it
+    expect(handleAuthCommand(auth, 8, `/login ${bobCode}`).kind).toBe('login_ok');
+    expect(adapter.bindingFor('8')?.owner).toBe('bob');
+  });
+
+  it('gives an unbound chat the SAME response regardless of input (no oracle)', () => {
+    const { auth } = ctx();
+    const ignore = { kind: 'ignore' };
+    expect(handleAuthCommand(auth, 5, 'hello')).toEqual(ignore);         // plain text
+    expect(handleAuthCommand(auth, 5, '/login')).toEqual(ignore);        // malformed
+    expect(handleAuthCommand(auth, 5, '/login 000000')).toEqual(ignore); // wrong code (no pending)
+    expect(handleAuthCommand(auth, 5, '/logout')).toEqual(ignore);       // not bound
+  });
+
+  it('re-pair after /logout works', () => {
+    const { auth, adapter } = ctx();
+    handleAuthCommand(auth, 9, `/login ${adapter.issueChallenge('owner').code}`);
+    handleAuthCommand(auth, 9, '/logout');
+    expect(isAuthorized(auth, 9)).toBe(false);
+    expect(handleAuthCommand(auth, 9, `/login ${adapter.issueChallenge('owner').code}`).kind).toBe('login_ok');
+    expect(isAuthorized(auth, 9)).toBe(true);
+  });
+});
+
 describe('interpretResult (pure turn-loop decision logic)', () => {
   it('reads a deferred tool from a tool_deferred result', () => {
     const r = interpretResult({ stop_reason: 'tool_deferred', deferred_tool_use: { id: 't1', name: 'Bash', input: { command: 'ls' } }, session_id: 's' });

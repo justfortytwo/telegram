@@ -34,6 +34,11 @@ export interface AuthContext {
  * True iff it has a persisted binding OR is in the bootstrap allowlist.
  */
 export function isAuthorized(ctx: AuthContext, chatId: number): boolean {
+  // Groups/channels (negative Telegram chat ids) are NEVER the owner: a group
+  // chat id identifies the ROOM, not the speaker, so authorizing one would let
+  // any member drive the assistant. Only private chats (chatId === the user id)
+  // can be authorized/bound.
+  if (chatId < 0) return false;
   if (ctx.bootstrap.has(chatId)) return true;
   return ctx.adapter.bindingFor(String(chatId)) !== null;
 }
@@ -54,6 +59,10 @@ export function handleAuthCommand(ctx: AuthContext, chatId: number, text: string
   const chatKey = String(chatId);
   const authorized = isAuthorized(ctx, chatId);
 
+  // Groups/channels can never pair or be authorized (see isAuthorized): the chat
+  // id is the room, not a person. Drop silently.
+  if (chatId < 0) return { kind: 'ignore' };
+
   const loginMatch = trimmed.match(LOGIN_RE);
   if (loginMatch) {
     const code = loginMatch[1];
@@ -63,6 +72,12 @@ export function handleAuthCommand(ctx: AuthContext, chatId: number, text: string
       return authorized
         ? { kind: 'login_failed', reply: 'Usage: /login <code>' }
         : { kind: 'ignore' };
+    }
+    // A chat that already holds a binding cannot re-point it with a fresh code:
+    // that would be an owner-reassignment primitive (and would consume a code
+    // minted for a different chat). Require an explicit /logout first.
+    if (ctx.adapter.bindingFor(chatKey)) {
+      return { kind: 'login_failed', reply: 'This chat is already paired. Send /logout first to re-pair.' };
     }
     const binding = ctx.adapter.verify(chatKey, code);
     if (binding) {
@@ -80,9 +95,9 @@ export function handleAuthCommand(ctx: AuthContext, chatId: number, text: string
     return { kind: 'logout', reply: 'Unbound. This chat can no longer reach the assistant until you /login again.' };
   }
 
-  // Not an auth command. Authorized chats fall through to the normal turn loop;
-  // unbound chats are dropped (lockdown).
-  return authorized ? { kind: 'ignore' } : { kind: 'ignore' };
+  // Not an auth command. Authorized chats fall through to the normal turn loop
+  // (the bridge re-derives authorization); unbound chats are dropped (lockdown).
+  return { kind: 'ignore' };
 }
 
 /** Convenience: does this inbound look like an auth command at all? */
