@@ -29,7 +29,7 @@
   ],
   "scripts": {
     "build": "tsc",
-    "test": "vitest"
+    "test": "vitest run"
   },
   "keywords": [
     "claude-code",
