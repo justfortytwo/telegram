@@ -25,17 +25,35 @@ export interface Binding {
   boundAt: string;         // ISO timestamp
 }
 
-/** The seam. Persists channel-id -> owner bindings; everything else injects this. */
+/**
+ * A pending pairing challenge. Persisted in the store (not in adapter memory) so
+ * a code minted in one process (e.g. `fortytwo pair`) is redeemable in another
+ * (the running bridge).
+ */
+export interface PendingChallenge {
+  code: string;
+  owner: string;
+  expiresAt: number; // epoch ms
+}
+
+/** The seam. Persists channel-id -> owner bindings + pending challenges; everything else injects this. */
 export interface BindingStore {
   get(channelType: ChannelType, channelUserId: string): Binding | null;
   put(binding: Binding): void;
   remove(channelType: ChannelType, channelUserId: string): void;
   list(channelType?: ChannelType): Binding[];
+  /** Persist a pending pairing challenge so any process sharing the store can redeem it. */
+  putChallenge(challenge: PendingChallenge): void;
+  /** Fetch + CONSUME a challenge by code (single-use); null if absent or expired. */
+  takeChallenge(code: string, now: number): PendingChallenge | null;
+  /** Drop expired challenges. */
+  sweepChallenges(now: number): void;
 }
 
 /** In-memory store — ideal for tests and ephemeral deployments. */
 export class MemoryBindingStore implements BindingStore {
   private readonly map = new Map<string, Binding>();
+  private readonly challenges = new Map<string, PendingChallenge>();
   private key(t: ChannelType, u: string): string { return `${t} ${u}`; }
 
   get(channelType: ChannelType, channelUserId: string): Binding | null {
@@ -50,6 +68,19 @@ export class MemoryBindingStore implements BindingStore {
   list(channelType?: ChannelType): Binding[] {
     const all = [...this.map.values()];
     return channelType ? all.filter((b) => b.channelType === channelType) : all;
+  }
+
+  putChallenge(challenge: PendingChallenge): void {
+    this.challenges.set(challenge.code, challenge);
+  }
+  takeChallenge(code: string, now: number): PendingChallenge | null {
+    const c = this.challenges.get(code);
+    if (!c) return null;
+    this.challenges.delete(code); // single-use: consume regardless of expiry
+    return c.expiresAt > now ? c : null;
+  }
+  sweepChallenges(now: number): void {
+    for (const [code, c] of this.challenges) if (c.expiresAt <= now) this.challenges.delete(code);
   }
 }
 
@@ -77,6 +108,11 @@ export class SqliteBindingStore implements BindingStore {
         owner           TEXT NOT NULL,
         bound_at        TEXT NOT NULL,
         PRIMARY KEY (channel_type, channel_user_id)
+      );
+      CREATE TABLE IF NOT EXISTS pending_challenges (
+        code       TEXT PRIMARY KEY,
+        owner      TEXT NOT NULL,
+        expires_at INTEGER NOT NULL
       );
     `);
   }
@@ -114,5 +150,33 @@ export class SqliteBindingStore implements BindingStore {
         channel_type: string; channel_user_id: string; owner: string; bound_at: string;
       }>;
     return rows.map((r) => ({ channelType: r.channel_type, channelUserId: r.channel_user_id, owner: r.owner, boundAt: r.bound_at }));
+  }
+
+  putChallenge(challenge: PendingChallenge): void {
+    this.db
+      .prepare(`
+        INSERT INTO pending_challenges (code, owner, expires_at)
+        VALUES (@code, @owner, @expiresAt)
+        ON CONFLICT(code) DO UPDATE SET owner = excluded.owner, expires_at = excluded.expires_at
+      `)
+      .run(challenge);
+  }
+
+  takeChallenge(code: string, now: number): PendingChallenge | null {
+    // Fetch + delete in one transaction so a code is single-use even under a race.
+    const consume = this.db.transaction((c: string): { code: string; owner: string; expires_at: number } | undefined => {
+      const row = this.db.prepare('SELECT code, owner, expires_at FROM pending_challenges WHERE code = ?').get(c) as
+        | { code: string; owner: string; expires_at: number }
+        | undefined;
+      this.db.prepare('DELETE FROM pending_challenges WHERE code = ?').run(c);
+      return row;
+    });
+    const row = consume(code);
+    if (!row) return null;
+    return row.expires_at > now ? { code: row.code, owner: row.owner, expiresAt: row.expires_at } : null;
+  }
+
+  sweepChallenges(now: number): void {
+    this.db.prepare('DELETE FROM pending_challenges WHERE expires_at <= ?').run(now);
   }
 }

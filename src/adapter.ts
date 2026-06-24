@@ -36,12 +36,6 @@ export interface ChannelAdapter {
   verify(channelUserId: string, proof: string): Binding | null;
 }
 
-interface PendingChallenge {
-  code: string;
-  owner: string;
-  expiresAt: number; // epoch ms
-}
-
 export interface ChallengeOptions {
   /** Code lifetime in seconds. Default 300 (5 min). Short by design. */
   ttlSeconds?: number;
@@ -52,13 +46,12 @@ export interface ChallengeOptions {
 }
 
 /**
- * Telegram implementation of ChannelAdapter. Codes live in-process (a wedged
- * bridge restart drops outstanding codes — acceptable for a short-TTL,
- * owner-initiated flow). Verified bindings persist via the injected BindingStore.
+ * Telegram implementation of ChannelAdapter. Pending codes AND verified bindings
+ * persist via the injected BindingStore, so a code minted in one process (the
+ * `fortytwo pair` CLI) is redeemable in another (the running bridge).
  */
 export class TelegramAdapter implements ChannelAdapter {
   readonly channelType: ChannelType = 'telegram';
-  private readonly pending = new Map<string, PendingChallenge>(); // code -> challenge
   private readonly ttlSeconds: number;
   private readonly digits: number;
   private readonly now: () => number;
@@ -70,23 +63,17 @@ export class TelegramAdapter implements ChannelAdapter {
   }
 
   issueChallenge(owner: string): Challenge {
-    this.sweepExpired();
+    this.store.sweepChallenges(this.now());
     const max = 10 ** this.digits;
     const code = String(randomInt(0, max)).padStart(this.digits, '0');
-    this.pending.set(code, { code, owner, expiresAt: this.now() + this.ttlSeconds * 1000 });
+    this.store.putChallenge({ code, owner, expiresAt: this.now() + this.ttlSeconds * 1000 });
     return { code, ttl: this.ttlSeconds };
   }
 
   verify(channelUserId: string, proof: string): Binding | null {
-    this.sweepExpired();
-    const code = proof.trim();
-    const challenge = this.pending.get(code);
+    // Single-use + expiry are enforced by the store's atomic takeChallenge.
+    const challenge = this.store.takeChallenge(proof.trim(), this.now());
     if (!challenge) return null;
-    if (challenge.expiresAt <= this.now()) { this.pending.delete(code); return null; }
-
-    // Single-use: consume the code regardless of downstream outcome.
-    this.pending.delete(code);
-
     const binding: Binding = {
       channelType: this.channelType,
       channelUserId,
@@ -105,12 +92,5 @@ export class TelegramAdapter implements ChannelAdapter {
   /** Remove a persisted binding (logout). */
   unbind(channelUserId: string): void {
     this.store.remove(this.channelType, channelUserId);
-  }
-
-  private sweepExpired(): void {
-    const t = this.now();
-    for (const [code, c] of this.pending) {
-      if (c.expiresAt <= t) this.pending.delete(code);
-    }
   }
 }

@@ -9,6 +9,30 @@ function ctx(bootstrap: number[] = []): { auth: AuthContext; adapter: TelegramAd
   return { auth: { adapter, bootstrap: new Set(bootstrap) }, adapter };
 }
 
+describe('cross-process pairing (persisted challenges)', () => {
+  it('a code issued by one adapter is redeemable by another sharing the store', () => {
+    // Simulates the real split: the CLI (`fortytwo pair`) mints the code in one
+    // process; the running bridge redeems it in another. They share a store.
+    const store = new MemoryBindingStore();
+    const cli = new TelegramAdapter(store);
+    const { code } = cli.issueChallenge('owner');
+
+    const bridge = new TelegramAdapter(store); // separate instance ~ separate process
+    const auth: AuthContext = { adapter: bridge, bootstrap: new Set() };
+    expect(handleAuthCommand(auth, 42, `/login ${code}`).kind).toBe('login_ok');
+    expect(isAuthorized(auth, 42)).toBe(true);
+  });
+
+  it('a consumed code cannot be reused by a third instance (single-use across the store)', () => {
+    const store = new MemoryBindingStore();
+    const { code } = new TelegramAdapter(store).issueChallenge('owner');
+    const a: AuthContext = { adapter: new TelegramAdapter(store), bootstrap: new Set() };
+    expect(handleAuthCommand(a, 1, `/login ${code}`).kind).toBe('login_ok');
+    const b: AuthContext = { adapter: new TelegramAdapter(store), bootstrap: new Set() };
+    expect(handleAuthCommand(b, 2, `/login ${code}`)).toEqual({ kind: 'ignore' });
+  });
+});
+
 describe('login / pairing binding flow', () => {
   it('unbound sender (no /login) gets NO response (lockdown)', () => {
     const { auth } = ctx();
