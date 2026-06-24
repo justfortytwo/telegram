@@ -1,6 +1,6 @@
 {
   "name": "@justfortytwo/telegram",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Telegram channel adapter for fortytwo: a long-polling bridge that drives a headless `claude` turn loop per chat, surfaces gate approvals as inline keyboards, and gates inbound access behind a login/pairing binding flow.",
   "license": "MIT",
   "author": {
@@ -14,7 +14,7 @@
   },
   "type": "module",
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -61,7 +61,7 @@
     }
   },
   "dependencies": {
-    "better-sqlite3": "^11.0.0"
+    "better-sqlite3": "^12.0.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.0",
