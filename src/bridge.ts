@@ -17,7 +17,7 @@
 // contract names (MEMORY_TOOL_CONTRACT_VERSION, POLICY_SCHEMA_VERSION).
 
 import { spawn } from 'node:child_process';
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, realpathSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -607,6 +607,12 @@ async function main(): Promise<void> {
   await pollLoop(tg, auth, state, h, embedder);
 }
 
-// Run only when invoked directly (node dist/bridge.js), not when imported by tests.
-const isMain = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
-if (isMain) main();
+// Run only when invoked directly (the bin / node dist/bridge.js), not when
+// imported by tests. Realpath comparison so the npm bin symlink resolves here.
+function invokedAsBin(): boolean {
+  const argv1 = process.argv[1];
+  if (!argv1) return false;
+  try { return realpathSync(argv1) === realpathSync(fileURLToPath(import.meta.url)); }
+  catch { return false; }
+}
+if (invokedAsBin()) main();
