@@ -39,6 +39,10 @@ channel side:  /login <code>                  ->  verify(chatId, code) -> bindin
   owner chat reach the bridge before any binding exists; it is not required once
   bindings exist.
 
+Pending challenges are **persisted in the binding store** (not in process
+memory), so a code minted by one process — e.g. the `fortytwo pair` CLI — is
+redeemable by the separately-running bridge. They are single-use and short-TTL.
+
 The contract is intentionally **channel-agnostic** (`ChannelAdapter` in
 `src/adapter.ts`) so a future Slack / email / SMS adapter implements the same
 `issueChallenge` / `verify` shape.
@@ -49,8 +53,9 @@ Authorization must work **even when the memory package is absent**, so the
 binding store is **self-owned** and does not assume the `@justfortytwo/memory`
 sqlite db exists:
 
-- `SqliteBindingStore` — default; a tiny `better-sqlite3` table in its own db
-  file (`state/telegram-bindings.db` by default).
+- `SqliteBindingStore` — default; a tiny `better-sqlite3` db in its own file
+  (`state/telegram-bindings.db` by default) holding **bindings + pending
+  challenges**, so a CLI-issued pairing code reaches the bridge.
 - `MemoryBindingStore` — in-process Map, for tests / ephemeral use.
 - `BindingStore` — the injectable interface. Supply a memory-backed
   implementation later without touching the login flow.
@@ -75,9 +80,13 @@ Install them alongside this package:
 npm install @justfortytwo/telegram @justfortytwo/memory @justfortytwo/gate
 ```
 
-The seams where these peers are wired are marked with `// TODO(wire):` in
-`src/bridge.ts`, `src/attachments.ts`, and `src/adapters-config.ts`. Until they
-are wired, the bridge runs **channel-only** (no memory/jobs) via no-op shims.
+The **memory** data path is wired: the bridge opens + migrates the memory DB at
+startup and **persists each channel event** to `@justfortytwo/memory`; recall
+happens inside the headless `claude` turn via the Memory MCP tools. If the memory
+peer is absent, the bridge degrades to **channel-only** (messages relay but are
+not persisted) rather than refusing to start. The **gate** "Allow _N_h" path
+still uses a local bash-allowlist fallback; wiring it to `@justfortytwo/gate`'s
+exact-command allowlist is the remaining seam.
 
 ## Environment
 
