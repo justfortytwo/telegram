@@ -96,7 +96,11 @@ exact-command allowlist is the remaining seam.
 | `ALLOWED_CHAT_IDS` | bootstrap | Comma-separated chat IDs allowed before any binding exists. Optional once bindings exist. |
 | `CLAUDE_BIN` | no | Path to the `claude` binary (default `claude`). |
 | `FORTYTWO_TURN_TIMEOUT` | no | Hard cap (seconds) on a single turn so a stalled model can't wedge the bridge (default 300). |
+| `FORTYTWO_BASH_ALLOW_TTL_HOURS` | no | Default TTL (hours) for "Allow _N_h" bash approvals (default 8). |
 | `TELEGRAM_BINDINGS_DB` | no | Path to the self-owned bindings db (default `state/telegram-bindings.db`). |
+| `DB_PATH` | no | Path to the memory DB the bridge opens/migrates at startup (default `db/fortytwo.db`, relative to `FORTYTWO_ROOT`). |
+| `EMBED_MODEL` | no | When set, the bridge uses the Ollama embedder for memory (otherwise a deterministic fallback). |
+| `OLLAMA_BASE_URL` | no | Base URL for the Ollama embedder (default `http://localhost:11434`; may be remote). |
 | `ASSISTANT_NAME` / `ASSISTANT_ACTOR` / `OWNER_ACTOR` | no | Display name + journal actor labels. |
 | `FORTYTWO_ROOT` | no | Working root for the headless `claude` process + state files. |
 
@@ -108,6 +112,15 @@ exact-command allowlist is the remaining seam.
 > `claude` CLI reads `ANTHROPIC_*` from its own config.
 
 ## Usage
+
+### Prerequisites / first run
+
+- The bridge **spawns the `claude` binary**, so Claude Code's `claude` must be on
+  your `PATH` (or point `CLAUDE_BIN` at it).
+- It loads `config/adapters.toml` from `$FORTYTWO_ROOT/config/`.
+- On first run it **requires** `TELEGRAM_BOT_TOKEN` and either `ALLOWED_CHAT_IDS`
+  or a pre-existing binding — with no authorized chat to reach, the bridge exits
+  immediately rather than long-polling a bot nobody can talk to.
 
 ```sh
 npm run build
