@@ -26,6 +26,7 @@ import { buildAttachment, inboxRelPath, withinSizeLimit, extensionFor, type Atta
 import { loadAdaptersConfig } from './adapters-config.js';
 import { TelegramAdapter } from './adapter.js';
 import { SqliteBindingStore, type BindingStore } from './bindings.js';
+import { envCompat } from './env.js';
 import { handleAuthCommand, isAuthorized, isAuthCommand, type AuthContext } from './login.js';
 import type { SourceKind } from '@justfortytwo/gate'; // peer — provenance SourceKind
 import type { DbHandles as MemDbHandles, Embedder as MemEmbedder, MemoryInput } from '@justfortytwo/memory';
@@ -139,7 +140,8 @@ function appendExactBashAllowlistEntry(_args: {
 
 // ---------------------------------------------------------------------------
 
-const ROOT = process.env.FORD_ROOT ? resolve(process.env.FORD_ROOT) : resolve(import.meta.dirname, '..');
+const ROOT_ENV = envCompat(process.env, 'FORTYTWO_ROOT', 'FORD_ROOT');
+const ROOT = ROOT_ENV ? resolve(ROOT_ENV) : resolve(import.meta.dirname, '..');
 const ADAPTERS = loadAdaptersConfig(resolve(ROOT, 'config', 'adapters.toml'));
 const STATE_PATH = resolve(ROOT, 'state', 'bridge-state.json');
 const BINDINGS_DB_PATH = process.env.TELEGRAM_BINDINGS_DB ? resolve(ROOT, process.env.TELEGRAM_BINDINGS_DB) : resolve(ROOT, 'state', 'telegram-bindings.db');
@@ -147,7 +149,7 @@ const CLAUDE_BIN = process.env.CLAUDE_BIN ?? 'claude';
 const ASSISTANT_NAME = process.env.ASSISTANT_NAME ?? 'Assistant';
 const ASSISTANT_ACTOR = process.env.ASSISTANT_ACTOR ?? 'assistant';
 const OWNER_ACTOR = process.env.OWNER_ACTOR ?? 'owner';
-const BASH_ALLOW_TTL_HOURS = Number(process.env.FORD_BASH_ALLOW_TTL_HOURS ?? DEFAULT_BASH_ALLOW_TTL_HOURS);
+const BASH_ALLOW_TTL_HOURS = Number(envCompat(process.env, 'FORTYTWO_BASH_ALLOW_TTL_HOURS', 'FORD_BASH_ALLOW_TTL_HOURS') ?? DEFAULT_BASH_ALLOW_TTL_HOURS);
 const BASH_ALLOWLIST = bashAllowlistPath(ROOT);
 
 // --- pure decision logic (unit-tested) ---
@@ -314,7 +316,7 @@ function runClaude(prompt: string, sessionId?: string): Promise<any> {
   if (sessionId) args.push('--resume', sessionId);
   // Hard cap so a stalled proxy/model turn can't wedge the bridge. Seconds;
   // generous default so legit long turns (orient/briefing) still complete.
-  const timeoutSec = Number(process.env.FORD_TURN_TIMEOUT ?? 300);
+  const timeoutSec = Number(envCompat(process.env, 'FORTYTWO_TURN_TIMEOUT', 'FORD_TURN_TIMEOUT') ?? 300);
   return new Promise((resolveTurn) => {
     const child = spawn(CLAUDE_BIN, args, {
       cwd: ROOT,

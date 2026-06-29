@@ -95,10 +95,14 @@ exact-command allowlist is the remaining seam.
 | `TELEGRAM_BOT_TOKEN` | yes | Bot token. The bridge is the **only** long-poller on this bot. |
 | `ALLOWED_CHAT_IDS` | bootstrap | Comma-separated chat IDs allowed before any binding exists. Optional once bindings exist. |
 | `CLAUDE_BIN` | no | Path to the `claude` binary (default `claude`). |
-| `FORD_TURN_TIMEOUT` | no | Hard cap (seconds) on a single turn so a stalled model can't wedge the bridge (default 300). |
+| `FORTYTWO_TURN_TIMEOUT` | no | Hard cap (seconds) on a single turn so a stalled model can't wedge the bridge (default 300). |
 | `TELEGRAM_BINDINGS_DB` | no | Path to the self-owned bindings db (default `state/telegram-bindings.db`). |
 | `ASSISTANT_NAME` / `ASSISTANT_ACTOR` / `OWNER_ACTOR` | no | Display name + journal actor labels. |
-| `FORD_ROOT` | no | Working root for the headless `claude` process + state files. |
+| `FORTYTWO_ROOT` | no | Working root for the headless `claude` process + state files. |
+
+> The historical `FORD_*` names (`FORD_ROOT`, `FORD_TURN_TIMEOUT`,
+> `FORD_BASH_ALLOW_TTL_HOURS`) are still honored as deprecated aliases — set the
+> `FORTYTWO_*` equivalents in new deployments.
 
 > Proxy auth for the headless `claude` session is **not** read here — the
 > `claude` CLI reads `ANTHROPIC_*` from its own config.
