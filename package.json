@@ -61,6 +61,7 @@
     }
   },
   "dependencies": {
+    "@justfortytwo/runner": "^0.1.0",
     "better-sqlite3": "^12.0.0"
   },
   "devDependencies": {

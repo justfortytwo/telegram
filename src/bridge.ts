@@ -16,10 +16,11 @@
 // copy their code; we declare them as peerDependencies and reference the
 // contract names (MEMORY_TOOL_CONTRACT_VERSION, POLICY_SCHEMA_VERSION).
 
-import { spawn } from 'node:child_process';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, realpathSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { createRunner } from '@justfortytwo/runner';
 
 import { Telegram, parseAllowed, approvalKeyboard, messageAttachmentSpecs, type TgMessage, type TgUpdate, type AttachmentSpec } from './telegram.js';
 import { buildAttachment, inboxRelPath, withinSizeLimit, extensionFor, type Attachment } from './attachments.js';
@@ -311,35 +312,32 @@ function saveState(s: BridgeState): void {
 
 // --- claude driver ---
 
-function runClaude(prompt: string, sessionId?: string): Promise<any> {
-  const args = ['-p', prompt, '--output-format', 'json'];
-  if (sessionId) args.push('--resume', sessionId);
-  // Hard cap so a stalled proxy/model turn can't wedge the bridge. Seconds;
-  // generous default so legit long turns (orient/briefing) still complete.
-  const timeoutSec = Number(envCompat(process.env, 'FORTYTWO_TURN_TIMEOUT', 'FORD_TURN_TIMEOUT') ?? 300);
-  return new Promise((resolveTurn) => {
-    const child = spawn(CLAUDE_BIN, args, {
-      cwd: ROOT,
-      // The assistant's canonical memory is the Memory MCP — skip Claude Code's
-      // built-in file-memory so context isn't double-booked. Scoped to bridge turns.
-      env: { ...process.env, CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    let out = ''; let err = ''; let settled = false;
-    const finish = (r: any) => { if (!settled) { settled = true; clearTimeout(timer); resolveTurn(r); } };
-    const timer = setTimeout(() => {
-      child.kill('SIGTERM');
-      console.error(`[bridge] turn aborted after ${timeoutSec}s (timeout)`);
-      finish({ result: `⏳ ${ASSISTANT_NAME}'s turn exceeded ${timeoutSec}s and was aborted (the proxy/model may have stalled). Try again.` });
-    }, timeoutSec * 1000);
-    child.stdout.on('data', (d) => { out += d; });
-    child.stderr.on('data', (d) => { err += d; });
-    child.on('error', (e) => finish({ result: `(claude failed to start: ${e.message})` }));
-    child.on('close', () => {
-      try { finish(JSON.parse(out)); }
-      catch { finish({ result: (out || err).slice(0, 4000) || '(empty claude response)' }); }
-    });
-  });
+// The assistant's canonical memory is the Memory MCP — skip Claude Code's
+// built-in file-memory so context isn't double-booked. Set once on the
+// process env so the runner's child inherits it without needing a custom
+// env injection hook.
+process.env['CLAUDE_CODE_DISABLE_AUTO_MEMORY'] = '1';
+
+// Normalise timeout: honour legacy FORD_TURN_TIMEOUT alias before the runner
+// reads FORTYTWO_TURN_TIMEOUT, so old env configs continue to work.
+const _legacyTimeout = envCompat(process.env, 'FORTYTWO_TURN_TIMEOUT', 'FORD_TURN_TIMEOUT');
+if (_legacyTimeout) process.env['FORTYTWO_TURN_TIMEOUT'] = _legacyTimeout;
+
+const _runner = createRunner({ bin: CLAUDE_BIN, cwd: ROOT });
+
+async function runClaude(prompt: string, sessionId?: string): Promise<any> {
+  const extraArgs: string[] = sessionId ? ['--resume', sessionId] : [];
+  const { raw, text } = await _runner(prompt, extraArgs);
+  // Runner returns raw=null on timeout/parse failure. Synthesise a sentinel
+  // result matching the shape interpretResult() and respond() expect.
+  if (raw === null) {
+    const timeoutSec = Number(process.env['FORTYTWO_TURN_TIMEOUT'] ?? 300);
+    return { result: `⏳ ${ASSISTANT_NAME}'s turn exceeded ${timeoutSec}s and was aborted (the proxy/model may have stalled). Try again.` };
+  }
+  // raw is the full parsed JSON (same object the old inline runClaude produced).
+  // interpretResult() reads raw.stop_reason / raw.deferred_tool_use / raw.result
+  // / raw.session_id — all preserved.
+  return raw;
 }
 
 // --- I/O glue ---
