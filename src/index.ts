@@ -76,10 +76,8 @@ export {
   telegramCommandReply,
   buildInboundPrompt,
   ingestMessageAttachments,
-  dueSchedules,
-  SCHEDULES,
+  mapChannelEventToMemoryInput,
   type DeferredTool,
   type Interpreted,
-  type Schedule,
   type AttachmentIo,
 } from './bridge.js';

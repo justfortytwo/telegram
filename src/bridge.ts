@@ -7,7 +7,7 @@
 //      headless turn ends with stop_reason tool_deferred; surface a card with an
 //      inline keyboard (Approve/Deny). The tap records the decision + resumes so
 //      the one-shot allow fires.
-//   3. Proactive wakes (scheduler): invoke `claude -p` at the spec's cron times.
+//   3. Proactive wakes are handled by @justfortytwo/scheduler (external daemon).
 //
 // CROSS-PACKAGE NOTE: this bridge orchestrates two PEER packages —
 //   - @justfortytwo/memory : memory store, jobs, pending-decision records, embeds.
@@ -113,11 +113,6 @@ async function store(h: DbHandles, e: Embedder, entry: ChannelEvent): Promise<nu
   if (!h || !e || !memStore) return 0; // channel-only mode
   return memStore(h, e, mapChannelEventToMemoryInput(entry));
 }
-async function addJob(_h: DbHandles, _item: unknown): Promise<number> {
-  // No-op: the standalone memory server embeds inline on `store`, so there is no
-  // separate reembed job, and the deferred-jobs runner was left out of memory's scope.
-  return 0;
-}
 async function setPendingDecisionByToolUseId(_h: DbHandles, _tuid: string, _status: string, _by: string): Promise<void> {
   // Best-effort no-op: the authoritative one-shot approval lives in the gate's
   // store and is consumed when the headless turn re-fires the deferred call; the
@@ -188,8 +183,6 @@ export function formatApprovalCard(d: DeferredTool, bashTtlHours = BASH_ALLOW_TT
     prompt,
   ].join('\n');
 }
-
-export interface Schedule { name: string; minute: number; hour: number; dow?: number; trigger: string; }
 
 export function telegramSourceKind(message: TgMessage): SourceKind {
   if (message.forward_origin || message.forward_from || message.forward_from_chat || message.reply_to_message) return 'quoted_text';
@@ -273,37 +266,19 @@ function telegramSourceMeta(message: TgMessage): Record<string, unknown> {
   };
 }
 
-export const SCHEDULES: Schedule[] = [
-  { name: 'daily-briefing', minute: 57, hour: 7, trigger: 'Run the daily-briefing skill and send me the rundown for today.' },
-  { name: 'sweep-afternoon', minute: 3, hour: 13, trigger: 'Open-thread sweep: check pending approvals and threads awaiting a reply; give me a one-line status.' },
-  { name: 'sweep-evening', minute: 3, hour: 18, trigger: 'Open-thread sweep: check pending approvals and threads awaiting reply; one-line status.' },
-  { name: 'learn-review', minute: 17, hour: 9, dow: 0, trigger: 'Run the learn-review skill: scan the recent Journal for patterns worth promoting. Propose-only — nothing installed.' },
-];
-
-/** Schedules whose cron slot matches `now` and haven't fired in this slot yet. */
-export function dueSchedules(now: Date, fired: Record<string, string>): Schedule[] {
-  const slot = (s: Schedule) => `${s.name}-${now.toISOString().slice(0, 13)}`; // dedupe within the hour
-  return SCHEDULES.filter((s) => {
-    if (now.getMinutes() !== s.minute || now.getHours() !== s.hour) return false;
-    if (s.dow !== undefined && now.getDay() !== s.dow) return false;
-    return fired[slot(s)] !== '1';
-  });
-}
-
 // --- state ---
 
 interface BridgeState {
   lastUpdateId: number;
   sessions: Record<number, string>;            // chatId -> claude session_id
   pending: Record<number, { toolUseId: string; sessionId?: string; toolName?: string; input?: Record<string, unknown> }>; // chatId -> deferred action
-  fired: Record<string, string>;               // schedule slot -> '1'
 }
 
 function loadState(): BridgeState {
   if (existsSync(STATE_PATH)) {
-    try { return { lastUpdateId: 0, sessions: {}, pending: {}, fired: {}, ...JSON.parse(readFileSync(STATE_PATH, 'utf8')) }; } catch { /* fall through */ }
+    try { return { lastUpdateId: 0, sessions: {}, pending: {}, ...JSON.parse(readFileSync(STATE_PATH, 'utf8')) }; } catch { /* fall through */ }
   }
-  return { lastUpdateId: 0, sessions: {}, pending: {}, fired: {} };
+  return { lastUpdateId: 0, sessions: {}, pending: {} };
 }
 function saveState(s: BridgeState): void {
   mkdirSync(dirname(STATE_PATH), { recursive: true });
@@ -343,12 +318,9 @@ async function runClaude(prompt: string, sessionId?: string): Promise<any> {
 // --- I/O glue ---
 
 async function logBridgeEntry(h: DbHandles, embedder: Embedder, entry: ChannelEvent): Promise<number> {
-  // TODO(wire): @justfortytwo/memory `store` (mcp__fortytwo-memory__store) — the
-  //   generic memory write that replaces the original assistant's old logEntry/log_entry tool.
-  const id = await store(h, embedder, entry);
-  // TODO(wire): @justfortytwo/memory job kind 'reembed_memory'.
-  await addJob(h, { kind: 'reembed_memory', payload: { memory_id: id }, max_attempts: 5 });
-  return id;
+  // memory's store() inline-enqueues a reembed_memory job when needed; no
+  // separate addJob call required here (that stub has been removed).
+  return store(h, embedder, entry);
 }
 
 async function sendReply(tg: Telegram, chatId: number, placeholderId: number | null, text: string): Promise<void> {
@@ -539,25 +511,6 @@ async function pollLoop(tg: Telegram, auth: AuthContext, state: BridgeState, h: 
   }
 }
 
-async function schedulerLoop(tg: Telegram, state: BridgeState, h: DbHandles, embedder: Embedder, ownerChatId: number): Promise<void> {
-  while (true) {
-    const now = new Date();
-    for (const s of dueSchedules(now, state.fired)) {
-      state.fired[`${s.name}-${now.toISOString().slice(0, 13)}`] = '1';
-      saveState(state);
-      console.log(`[bridge] scheduled wake: ${s.name}`);
-      try {
-        await logBridgeEntry(h, embedder, { channel: 'internal', direction: 'internal', actor: ASSISTANT_ACTOR, kind: 'wake', content: `scheduled: ${s.name}` });
-        const result = await runClaude(s.trigger);
-        await respond(tg, h, embedder, state, ownerChatId, null, result);
-      } catch (e: any) {
-        console.error(`[bridge] schedule ${s.name} failed: ${e?.message}`);
-      }
-    }
-    await sleep(60_000);
-  }
-}
-
 function sleep(ms: number): Promise<void> { return new Promise((r) => setTimeout(r, ms)); }
 
 /** Shows Telegram's native "typing…" indicator (refreshed every 4s) while `fn` runs. */
@@ -592,7 +545,6 @@ async function main(): Promise<void> {
     console.error('[bridge] no ALLOWED_CHAT_IDS bootstrap and no existing bindings — nobody can reach the bridge. Set ALLOWED_CHAT_IDS or pre-seed a binding.');
     process.exit(1);
   }
-  const ownerChatId = bootstrap.size ? [...bootstrap][0] : Number(store.list('telegram')[0].channelUserId);
 
   // Persist channel events to the memory store (optional peer; channel-only if absent).
   const dbPath = process.env.DB_PATH ? resolve(ROOT, process.env.DB_PATH) : resolve(ROOT, 'db', 'fortytwo.db');
@@ -601,9 +553,8 @@ async function main(): Promise<void> {
   const tg = new Telegram(token, bootstrap);
   const state = loadState();
 
-  console.log(`[bridge] up. owner chat=${ownerChatId}, bootstrap=${bootstrap.size}, bindings=${store.list('telegram').length}, bindingsDb=${BINDINGS_DB_PATH}`);
-  // Proactive wakes + polling run concurrently. (jobLoop runs once memory is wired.)
-  void schedulerLoop(tg, state, h, embedder, ownerChatId);
+  console.log(`[bridge] up. bootstrap=${bootstrap.size}, bindings=${store.list('telegram').length}, bindingsDb=${BINDINGS_DB_PATH}`);
+  // Proactive wakes are now handled by @justfortytwo/scheduler (external daemon).
   await pollLoop(tg, auth, state, h, embedder);
 }
 
