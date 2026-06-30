@@ -67,6 +67,15 @@ export {
   type LoginAction,
 } from './login.js';
 
+// --- Scheduler notifier adapter + deduped reply enqueuer ---
+export {
+  telegramNotifier,
+  enqueueReply,
+  type TelegramNotifierInstance,
+  type Notification,
+  type EnqueueReplyDeps,
+} from './notify.js';
+
 // --- Bridge turn-loop primitives (owned; pure decision logic is testable) ---
 export {
   interpretResult,

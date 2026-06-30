@@ -21,6 +21,7 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { createRunner } from '@justfortytwo/runner';
+import { enqueueReply, type EnqueueReplyDeps } from './notify.js';
 
 import { Telegram, parseAllowed, approvalKeyboard, messageAttachmentSpecs, type TgMessage, type TgUpdate, type AttachmentSpec } from './telegram.js';
 import { buildAttachment, inboxRelPath, withinSizeLimit, extensionFor, type Attachment } from './attachments.js';
@@ -70,6 +71,9 @@ export function mapChannelEventToMemoryInput(entry: ChannelEvent): MemoryInput {
 
 // memory.store, captured by loadMemoryEngine when the peer is present.
 let memStore: ((h: MemDbHandles, e: MemEmbedder, m: MemoryInput) => Promise<number>) | null = null;
+// memory job helpers, captured when the peer is present.
+let memEnqueue: ((h: MemDbHandles, j: { kind: string; run_at: string; payload?: unknown }) => number) | null = null;
+let memExistsPending: ((h: MemDbHandles, kind: string, idValue: number) => boolean) | null = null;
 
 /**
  * Load the optional memory engine: open + migrate the DB and build an embedder
@@ -82,6 +86,8 @@ async function loadMemoryEngine(dbPath: string): Promise<{ h: DbHandles; embedde
     openDb: (p: string) => MemDbHandles & { k: unknown };
     runMigrations: (k: unknown) => Promise<void>;
     store: (h: MemDbHandles, e: MemEmbedder, m: MemoryInput) => Promise<number>;
+    enqueue: (h: MemDbHandles, j: { kind: string; run_at: string; payload?: unknown }) => number;
+    existsPending: (h: MemDbHandles, kind: string, idValue: number) => boolean;
     FakeEmbedder: new () => MemEmbedder;
     OllamaEmbedder: new (model: string, baseUrl?: string) => MemEmbedder;
   };
@@ -101,12 +107,33 @@ async function loadMemoryEngine(dbPath: string): Promise<{ h: DbHandles; embedde
       ? new mod.OllamaEmbedder(embedModel, process.env.OLLAMA_BASE_URL)
       : new mod.FakeEmbedder();
     memStore = mod.store;
+    memEnqueue = mod.enqueue;
+    memExistsPending = mod.existsPending;
     console.log(`[bridge] memory wired (db=${dbPath}, embedder=${embedModel ? 'ollama:' + embedModel : 'fake'}).`);
     return { h, embedder };
   } catch (e: unknown) {
     console.error(`[bridge] memory wiring failed (${(e as Error)?.message}) — channel-only.`);
     return { h: null, embedder: null };
   }
+}
+
+/**
+ * Build an EnqueueReplyDeps bound to the bridge's memory handle.
+ * Returns null when memory is not wired (channel-only mode).
+ *
+ * FLAG: the trigger condition for enqueueReply is best-effort. The bridge
+ * does not have a hard "busy/unreachable" state — it's used here in the
+ * pollLoop error handler when a message cannot be delivered inline, so the
+ * scheduler can drain it later. The dedup + DI is the primary deliverable.
+ */
+function makeEnqueueReplyDeps(h: DbHandles): EnqueueReplyDeps | null {
+  if (!h || !memEnqueue || !memExistsPending) return null;
+  const boundEnqueue = memEnqueue.bind(null, h);
+  const boundExistsPending = memExistsPending.bind(null, h);
+  return {
+    enqueue: (j) => boundEnqueue(j),
+    existsPending: (kind, id) => boundExistsPending(kind, id),
+  };
 }
 
 async function store(h: DbHandles, e: Embedder, entry: ChannelEvent): Promise<number> {
@@ -477,6 +504,9 @@ async function handleCallback(tg: Telegram, state: BridgeState, h: DbHandles, em
 }
 
 async function pollLoop(tg: Telegram, auth: AuthContext, state: BridgeState, h: DbHandles, embedder: Embedder): Promise<void> {
+  // Pre-build dedup deps once; null when memory is unavailable (channel-only).
+  const replyDeps = makeEnqueueReplyDeps(h);
+
   while (true) {
     let updates: TgUpdate[] = [];
     try {
@@ -503,7 +533,18 @@ async function pollLoop(tg: Telegram, auth: AuthContext, state: BridgeState, h: 
       } catch (e: any) {
         console.error(`[bridge] handler error: ${e?.message}`);
         if (isAuthorized(auth, chatId)) {
-          try { await tg.sendMessage(chatId, `⚠️ Something went wrong handling that: ${e?.message ?? e}`); } catch { /* ignore */ }
+          const errMsg = `⚠️ Something went wrong handling that: ${e?.message ?? e}`;
+          // Best-effort inline reply; on failure, enqueue via scheduler so the
+          // reply is delivered when the bridge recovers (dedup guards against
+          // double-delivery if the inline send succeeds on retry).
+          // FLAG: this is a conservative wiring — the "unreachable" trigger is
+          // a handler exception, not a true busy/offline state. The dedup
+          // helper + its tests are the primary deliverable of Part C.
+          let inlineSent = false;
+          try { await tg.sendMessage(chatId, errMsg); inlineSent = true; } catch { /* ignore */ }
+          if (!inlineSent && replyDeps) {
+            await enqueueReply(replyDeps, chatId, errMsg, new Date().toISOString());
+          }
         }
       }
       saveState(state);
