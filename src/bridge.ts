@@ -315,21 +315,31 @@ function saveState(s: BridgeState): void {
 // --- claude driver ---
 
 // The assistant's canonical memory is the Memory MCP — skip Claude Code's
-// built-in file-memory so context isn't double-booked. Set once on the
-// process env so the runner's child inherits it without needing a custom
-// env injection hook.
-process.env['CLAUDE_CODE_DISABLE_AUTO_MEMORY'] = '1';
-
-// Normalise timeout: honour legacy FORD_TURN_TIMEOUT alias before the runner
-// reads FORTYTWO_TURN_TIMEOUT, so old env configs continue to work.
-const _legacyTimeout = envCompat(process.env, 'FORTYTWO_TURN_TIMEOUT', 'FORD_TURN_TIMEOUT');
-if (_legacyTimeout) process.env['FORTYTWO_TURN_TIMEOUT'] = _legacyTimeout;
-
-const _runner = createRunner({ bin: CLAUDE_BIN, cwd: ROOT });
+// built-in file-memory so context isn't double-booked.
+//
+// Lazily initialised: the env mutation + runner construction happen on the
+// FIRST headless turn, NOT at module load — so importing bridge.ts (as the
+// tests do for interpretResult/mapChannelEventToMemoryInput) has no
+// side-effects (no process.env writes, no spawn). The env must be set before
+// the first claude spawn, which getRunner() guarantees.
+let _runner: ReturnType<typeof createRunner> | undefined;
+function getRunner(): ReturnType<typeof createRunner> {
+  if (!_runner) {
+    // Skip Claude Code's built-in file-memory so context isn't double-booked;
+    // set on process.env so the runner's spawned child inherits it.
+    process.env['CLAUDE_CODE_DISABLE_AUTO_MEMORY'] = '1';
+    // Honour the legacy FORD_TURN_TIMEOUT alias before the runner reads
+    // FORTYTWO_TURN_TIMEOUT, so old env configs continue to work.
+    const legacyTimeout = envCompat(process.env, 'FORTYTWO_TURN_TIMEOUT', 'FORD_TURN_TIMEOUT');
+    if (legacyTimeout) process.env['FORTYTWO_TURN_TIMEOUT'] = legacyTimeout;
+    _runner = createRunner({ bin: CLAUDE_BIN, cwd: ROOT });
+  }
+  return _runner;
+}
 
 async function runClaude(prompt: string, sessionId?: string): Promise<any> {
   const extraArgs: string[] = sessionId ? ['--resume', sessionId] : [];
-  const { raw, text } = await _runner(prompt, extraArgs);
+  const { raw } = await getRunner()(prompt, extraArgs);
   // Runner returns raw=null on timeout/parse failure. Synthesise a sentinel
   // result matching the shape interpretResult() and respond() expect.
   if (raw === null) {
