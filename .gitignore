@@ -6,3 +6,6 @@ dist
 *.db
 *.sqlite
 *.sqlite3
+.claude/
+.codegraph/
+.wolf/

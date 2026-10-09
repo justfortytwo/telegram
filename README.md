@@ -1,21 +1,66 @@
 # @justfortytwo/telegram
 
 The **Telegram channel adapter** for [fortytwo](https://github.com/justfortytwo) — a
-standalone, always-on **bridge** that connects a Telegram bot to a headless
-[`claude`](https://docs.claude.com/en/docs/claude-code) turn loop.
+standalone, always-on **bridge** connecting a Telegram bot to persistent Claude
+Code sessions through `@justfortytwo/runner`.
 
-It does three jobs:
+1. **Transport.** Each active authorized chat normally has one live RunnerSession.
+   After authorization, attachment ingestion and optional journaling, input waits
+   only for `session.send()` to write it. Polling continues while Claude works;
+   another message goes to the same session immediately after preprocessing.
+2. **Output and approvals.** Complete assistant-message events are coalesced into
+   an evolving Telegram reply, edited at most once per second during streaming.
+   A result finalizes the reply; long replies use additional messages of at most
+   4000 UTF-16 units. Typing refreshes while submitted inputs await results.
+   Existing gate deferrals produce approval cards. Approving sends the existing
+   continuation prompt to the live session, or recreates it using a saved ID.
+3. **Scheduler separation.** Proactive wakes remain the responsibility of the
+   external `@justfortytwo/scheduler` daemon.
 
-1. **Turn loop.** Long-poll Telegram, and for each authorized inbound message
-   drive a headless `claude -p --output-format json` turn (resuming the per-chat
-   session), then transport the assistant's reply back.
-2. **Approval UX.** When the safety gate defers an external/irreversible tool
-   call, the turn ends with `stop_reason: tool_deferred`. The bridge surfaces an
-   **inline-keyboard approval card** (Approve / Deny, plus "Allow _N_h" for exact
-   Bash commands). The tap records the decision and resumes the turn so the
-   one-shot allow fires.
-3. **Proactive wakes.** A scheduler invokes `claude -p` at fixed cron-like slots
-   (daily briefing, open-thread sweeps, weekly learn-review).
+## Session lifecycle and recovery
+
+The bridge owns the chat-to-session mapping. Runner owns the Claude process and
+stream-json transport; Claude Code owns the agent. Telegram makes no provider or
+model decisions. The runner inherits process configuration and receives
+`CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` explicitly, without changing `process.env`.
+Persistent sessions have no default wall-clock turn timeout.
+
+Claude stays alive between messages. When runner exposes a session ID, the bridge
+writes it to `sessions` in `state/bridge-state.json`. Following a bridge restart,
+the next authorized message lazily creates a session with `resumeSessionId`.
+These IDs are recovery hints: the state file is not a transactional message queue,
+and in-flight inputs, partial replies, or unobserved IDs can be lost on a crash.
+Recovery also requires Claude Code's underlying session data to remain available.
+
+An unexpected Claude exit removes the live mapping, retains the last known ID,
+and reports an error if input was awaiting a result. The next message attempts
+resumption; there is no automatic restart supervisor or input replay. Stderr is
+logged locally. Asynchronous Telegram delivery failures are logged; there is no
+new durable output queue. Assistant events are complete messages, not token-level
+streaming, and concurrent inputs share the session's output stream.
+
+SIGINT/SIGTERM abort polling, stop new session work and deterministically close
+live RunnerSessions. `/logout` closes the chat's live process and removes its
+binding, while retaining durable conversation IDs and existing pending approval
+recovery data. The existing `ALLOWED_CHAT_IDS` bootstrap authorization still applies
+independently of bindings.
+
+The runner dependency is pinned to the published prerelease
+`@justfortytwo/runner@1.0.0-0` (npm dist-tag `next`), the first release with
+persistent sessions. Move to a stable `^1` range once runner publishes one.
+
+### Manual check against a real Claude Code
+
+The automated suite uses fake runners only. To verify concurrency end to end, run
+the bridge with a test bot (`TELEGRAM_BOT_TOKEN`, `ALLOWED_CHAT_IDS=<your chat>`,
+`claude` on `PATH`), then:
+
+1. Send a message that makes Claude work for a while (e.g. "count slowly to 20
+   using a Bash `sleep 1` between numbers").
+2. While typing is shown, send a second message. The bridge log should print the
+   second `inbound` line immediately, and `ps` should show a single `claude` child.
+3. Stop the bridge with Ctrl-C and confirm no `claude` process remains; restart
+   it and send a message: the reply should continue the same conversation.
 
 ## Pairing / login binding model
 
@@ -33,7 +78,7 @@ channel side:  /login <code>                  ->  verify(chatId, code) -> bindin
   bind.
 - `/login <code>` verifies the code and, on success, **persists a binding**
   `(channelType, channelUserId) -> owner`.
-- `/logout` removes the binding.
+- `/logout` removes the binding and closes the live session (recovery IDs remain).
 - Every inbound message is authorized against **persisted bindings ∪ the
   optional `ALLOWED_CHAT_IDS` bootstrap set**. The bootstrap set lets the first
   owner chat reach the bridge before any binding exists; it is not required once
@@ -64,20 +109,23 @@ sqlite db exists:
 > table, swap the default store for a memory-backed `BindingStore`. The login
 > flow is unaffected.
 
-## Peer dependencies
+## fortytwo package dependencies
 
-This package orchestrates two **peer** packages — they are referenced, not
-bundled:
+`@justfortytwo/gate` is a regular dependency: `attachments.ts` imports its
+`createSourceEnvelope` provenance helper at runtime (gate has no dependencies of
+its own). Using gate as a *policy hook* remains optional and is configured
+separately. `@justfortytwo/memory` is an **optional peer**: it is loaded
+dynamically, and it is also a devDependency so types and tests resolve.
 
-| Peer | Used for | Contract |
+| Package | Used for | Contract |
 | --- | --- | --- |
 | `@justfortytwo/memory` | Memory store, jobs, pending-decision records, embeddings | `MEMORY_TOOL_CONTRACT_VERSION` (tools `mcp__fortytwo-memory__*`) |
 | `@justfortytwo/gate` | Bash exact-command allowlist behind "Allow _N_h"; provenance envelopes | `POLICY_SCHEMA_VERSION` |
 
-Install them alongside this package:
+Install memory alongside this package to enable persistence:
 
 ```sh
-npm install @justfortytwo/telegram @justfortytwo/memory @justfortytwo/gate
+npm install @justfortytwo/telegram @justfortytwo/memory
 ```
 
 The **memory** data path is wired: the bridge opens + migrates the memory DB at
@@ -85,8 +133,8 @@ startup and **persists each channel event** to `@justfortytwo/memory`; recall
 happens inside the headless `claude` turn via the Memory MCP tools. If the memory
 peer is absent, the bridge degrades to **channel-only** (messages relay but are
 not persisted) rather than refusing to start. The **gate** "Allow _N_h" path
-still uses a local bash-allowlist fallback; wiring it to `@justfortytwo/gate`'s
-exact-command allowlist is the remaining seam.
+still uses a local placeholder; wiring it to `@justfortytwo/gate`'s
+exact-command allowlist remains a stub, as does the cross-process pending-decision write. This migration preserves those existing seams; it does not implement gate permissions.
 
 ## Environment
 
@@ -95,7 +143,6 @@ exact-command allowlist is the remaining seam.
 | `TELEGRAM_BOT_TOKEN` | yes | Bot token. The bridge is the **only** long-poller on this bot. |
 | `ALLOWED_CHAT_IDS` | bootstrap | Comma-separated chat IDs allowed before any binding exists. Optional once bindings exist. |
 | `CLAUDE_BIN` | no | Path to the `claude` binary (default `claude`). |
-| `FORTYTWO_TURN_TIMEOUT` | no | Hard cap (seconds) on a single turn so a stalled model can't wedge the bridge (default 300). |
 | `FORTYTWO_BASH_ALLOW_TTL_HOURS` | no | Default TTL (hours) for "Allow _N_h" bash approvals (default 8). |
 | `TELEGRAM_BINDINGS_DB` | no | Path to the self-owned bindings db (default `state/telegram-bindings.db`). |
 | `DB_PATH` | no | Path to the memory DB the bridge opens/migrates at startup (default `db/fortytwo.db`, relative to `FORTYTWO_ROOT`). |
@@ -104,7 +151,7 @@ exact-command allowlist is the remaining seam.
 | `ASSISTANT_NAME` / `ASSISTANT_ACTOR` / `OWNER_ACTOR` | no | Display name + journal actor labels. |
 | `FORTYTWO_ROOT` | no | Working root for the headless `claude` process + state files. |
 
-> The historical `FORD_*` names (`FORD_ROOT`, `FORD_TURN_TIMEOUT`,
+> The historical `FORD_*` names (`FORD_ROOT`,
 > `FORD_BASH_ALLOW_TTL_HOURS`) are still honored as deprecated aliases — set the
 > `FORTYTWO_*` equivalents in new deployments.
 

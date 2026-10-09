@@ -2,7 +2,7 @@
 // Telegram bridge adapter. Always-on process (tmux / wakeup loop). It does:
 //   1. Long-poll Telegram, authorize each inbound against persisted bindings ∪
 //      ALLOWED_CHAT_IDS bootstrap (login.ts), journal inbound on receipt, drive a
-//      headless `claude -p` per chat, and transport the assistant's reply back.
+//      persistent RunnerSession per chat, and transport the assistant's reply back.
 //   2. Approval UX: when the gate defers an [external]/[irreversible] call the
 //      headless turn ends with stop_reason tool_deferred; surface a card with an
 //      inline keyboard (Approve/Deny). The tap records the decision + resumes so
@@ -20,7 +20,8 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, realpathSync } from
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { createRunner } from '@justfortytwo/runner';
+import { createRunner, type RunResult } from '@justfortytwo/runner';
+import { ChatSessions } from './chat-sessions.js';
 import { enqueueReply, type EnqueueReplyDeps } from './notify.js';
 
 import { Telegram, parseAllowed, approvalKeyboard, messageAttachmentSpecs, type TgMessage, type TgUpdate, type AttachmentSpec } from './telegram.js';
@@ -81,7 +82,7 @@ let memExistsPending: ((h: MemDbHandles, kind: string, idValue: number) => boole
  * handles when memory is not installed or fails to open — the bridge then runs
  * channel-only rather than refusing to start.
  */
-async function loadMemoryEngine(dbPath: string): Promise<{ h: DbHandles; embedder: Embedder }> {
+export async function loadMemoryEngine(dbPath: string): Promise<{ h: DbHandles; embedder: Embedder }> {
   type MemModule = {
     openDb: (p: string) => MemDbHandles & { k: unknown };
     runMigrations: (k: unknown) => Promise<void>;
@@ -295,9 +296,9 @@ function telegramSourceMeta(message: TgMessage): Record<string, unknown> {
 
 // --- state ---
 
-interface BridgeState {
+export interface BridgeState {
   lastUpdateId: number;
-  sessions: Record<number, string>;            // chatId -> claude session_id
+  sessions: Record<number, string>;            // recovery only: chatId -> Claude session ID
   pending: Record<number, { toolUseId: string; sessionId?: string; toolName?: string; input?: Record<string, unknown> }>; // chatId -> deferred action
 }
 
@@ -312,44 +313,15 @@ function saveState(s: BridgeState): void {
   writeFileSync(STATE_PATH, JSON.stringify(s, null, 2));
 }
 
-// --- claude driver ---
+// --- persistent Claude sessions ---
 
-// The assistant's canonical memory is the Memory MCP — skip Claude Code's
-// built-in file-memory so context isn't double-booked.
-//
-// Lazily initialised: the env mutation + runner construction happen on the
-// FIRST headless turn, NOT at module load — so importing bridge.ts (as the
-// tests do for interpretResult/mapChannelEventToMemoryInput) has no
-// side-effects (no process.env writes, no spawn). The env must be set before
-// the first claude spawn, which getRunner() guarantees.
-let _runner: ReturnType<typeof createRunner> | undefined;
-function getRunner(): ReturnType<typeof createRunner> {
-  if (!_runner) {
-    // Skip Claude Code's built-in file-memory so context isn't double-booked;
-    // set on process.env so the runner's spawned child inherits it.
-    process.env['CLAUDE_CODE_DISABLE_AUTO_MEMORY'] = '1';
-    // Honour the legacy FORD_TURN_TIMEOUT alias before the runner reads
-    // FORTYTWO_TURN_TIMEOUT, so old env configs continue to work.
-    const legacyTimeout = envCompat(process.env, 'FORTYTWO_TURN_TIMEOUT', 'FORD_TURN_TIMEOUT');
-    if (legacyTimeout) process.env['FORTYTWO_TURN_TIMEOUT'] = legacyTimeout;
-    _runner = createRunner({ bin: CLAUDE_BIN, cwd: ROOT });
-  }
-  return _runner;
-}
-
-async function runClaude(prompt: string, sessionId?: string): Promise<any> {
-  const extraArgs: string[] = sessionId ? ['--resume', sessionId] : [];
-  const { raw } = await getRunner()(prompt, extraArgs);
-  // Runner returns raw=null on timeout/parse failure. Synthesise a sentinel
-  // result matching the shape interpretResult() and respond() expect.
-  if (raw === null) {
-    const timeoutSec = Number(process.env['FORTYTWO_TURN_TIMEOUT'] ?? 300);
-    return { result: `⏳ ${ASSISTANT_NAME}'s turn exceeded ${timeoutSec}s and was aborted (the proxy/model may have stalled). Try again.` };
-  }
-  // raw is the full parsed JSON (same object the old inline runClaude produced).
-  // interpretResult() reads raw.stop_reason / raw.deferred_tool_use / raw.result
-  // / raw.session_id — all preserved.
-  return raw;
+export function createBridgeSessions(tg: Telegram, state: BridgeState, h: DbHandles, embedder: Embedder): ChatSessions {
+  const runner = createRunner({ bin: CLAUDE_BIN, cwd: ROOT, env: { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' } });
+  return new ChatSessions(runner, tg, {
+    ids: state.sessions,
+    persist: () => saveState(state),
+    onResult: (chatId, result, text) => respond(tg, h, embedder, state, chatId, result, text),
+  });
 }
 
 // --- I/O glue ---
@@ -367,26 +339,24 @@ async function sendReply(tg: Telegram, chatId: number, placeholderId: number | n
   await tg.sendMessage(chatId, text || '(no reply)');
 }
 
-async function respond(tg: Telegram, h: DbHandles, embedder: Embedder, state: BridgeState, chatId: number, placeholderId: number | null, result: any): Promise<void> {
-  if (result?.session_id) state.sessions[chatId] = result.session_id;
-  const interp = interpretResult(result);
-  if (interp.deferred) {
+async function respond(tg: Telegram, h: DbHandles, embedder: Embedder, state: BridgeState, chatId: number, result: RunResult, text: string): Promise<boolean> {
+  // Raw result access is confined to the existing gate compatibility seam.
+  const deferred = interpretResult(result.raw).deferred;
+  if (deferred) {
     state.pending[chatId] = {
-      toolUseId: interp.deferred.id, sessionId: result?.session_id,
-      toolName: interp.deferred.name, input: interp.deferred.input,
+      toolUseId: deferred.id, sessionId: state.sessions[chatId],
+      toolName: deferred.name, input: deferred.input,
     };
-    console.log(`[bridge] chat ${chatId}: action deferred (${interp.deferred.name}) — approval card sent`);
-    const keyboardOpts = interp.deferred.name === 'Bash' ? { bashTtlHours: BASH_ALLOW_TTL_HOURS } : {};
-    await tg.sendMessage(chatId, formatApprovalCard(interp.deferred), approvalKeyboard(interp.deferred.id, keyboardOpts));
-  } else {
-    const text = interp.reply ?? '(no reply)';
-    await logBridgeEntry(h, embedder, { channel: 'telegram', direction: 'outbound', actor: ASSISTANT_ACTOR, kind: 'message', content: text });
-    console.log(`[bridge] chat ${chatId}: replied (${text.length} chars)`);
-    await sendReply(tg, chatId, placeholderId, text);
+    saveState(state);
+    const keyboardOpts = deferred.name === 'Bash' ? { bashTtlHours: BASH_ALLOW_TTL_HOURS } : {};
+    await tg.sendMessage(chatId, formatApprovalCard(deferred), approvalKeyboard(deferred.id, keyboardOpts));
+    return true;
   }
+  await logBridgeEntry(h, embedder, { channel: 'telegram', direction: 'outbound', actor: ASSISTANT_ACTOR, kind: 'message', content: text });
+  return false;
 }
 
-async function handleInbound(tg: Telegram, auth: AuthContext, state: BridgeState, h: DbHandles, embedder: Embedder, chatId: number, message: TgMessage): Promise<void> {
+export async function handleInbound(tg: Telegram, auth: AuthContext, state: BridgeState, h: DbHandles, embedder: Embedder, chatId: number, message: TgMessage, sessions: ChatSessions): Promise<void> {
   const text = message.text ?? '';
 
   // --- AUTH GATE (lockdown) -------------------------------------------------
@@ -401,6 +371,7 @@ async function handleInbound(tg: Telegram, auth: AuthContext, state: BridgeState
         await sendReply(tg, chatId, null, action.reply);
         return;
       case 'logout':
+        await sessions.close(chatId);
         console.log(`[bridge] chat ${chatId}: unbound`);
         await sendReply(tg, chatId, null, action.reply);
         return;
@@ -417,7 +388,6 @@ async function handleInbound(tg: Telegram, auth: AuthContext, state: BridgeState
   }
   // --- end auth gate --------------------------------------------------------
 
-  const t0 = Date.now();
   const io: AttachmentIo = {
     download: async (fileId) => tg.downloadFile(await tg.getFilePath(fileId)),
     write: (relPath, bytes) => { const abs = resolve(ROOT, relPath); mkdirSync(dirname(abs), { recursive: true }); writeFileSync(abs, bytes); },
@@ -456,15 +426,11 @@ async function handleInbound(tg: Telegram, auth: AuthContext, state: BridgeState
 
   const prompt = buildInboundPrompt(text, attachments);
   console.log(`[bridge] chat ${chatId}: inbound "${journalContent.slice(0, 50)}" (${attachments.length} att) — waking assistant`);
-  const t1 = Date.now();
-  const result = await withTyping(tg, chatId, () => runClaude(prompt, state.sessions[chatId]));
-  const claudeMs = Date.now() - t1;
-  await respond(tg, h, embedder, state, chatId, null, result);
-  console.log(`[bridge] chat ${chatId}: turn ${Date.now() - t0}ms (claude ${claudeMs}ms)`);
+  await sessions.send(chatId, prompt);
 }
 
 /** Handle an inline-keyboard tap on an approval card. */
-async function handleCallback(tg: Telegram, state: BridgeState, h: DbHandles, embedder: Embedder, chatId: number, cbId: string, data: string, cardMessageId: number): Promise<void> {
+export async function handleCallback(tg: Telegram, state: BridgeState, h: DbHandles, embedder: Embedder, chatId: number, cbId: string, data: string, cardMessageId: number, sessions: ChatSessions): Promise<void> {
   const sep = data.indexOf(':');
   const action = sep >= 0 ? data.slice(0, sep) : data;
   const tuid = sep >= 0 ? data.slice(sep + 1) : '';
@@ -502,8 +468,8 @@ async function handleCallback(tg: Telegram, state: BridgeState, h: DbHandles, em
     delete state.pending[chatId];
     await tg.answerCallbackQuery(cbId, statusText).catch(() => {});
     await tg.editMessageText(chatId, cardMessageId, `${statusText}...`).catch(() => {});
-    const result = await withTyping(tg, chatId, () => runClaude('Approved - proceed with the deferred action now.', pending.sessionId));
-    await respond(tg, h, embedder, state, chatId, null, result);
+    saveState(state);
+    await sessions.send(chatId, 'Approved - proceed with the deferred action now.', pending.sessionId);
   } else {
     console.log(`[bridge] chat ${chatId}: denied ${tuid}`);
     await setPendingDecisionByToolUseId(h, tuid, 'denied', OWNER_ACTOR);
@@ -513,20 +479,22 @@ async function handleCallback(tg: Telegram, state: BridgeState, h: DbHandles, em
   }
 }
 
-async function pollLoop(tg: Telegram, auth: AuthContext, state: BridgeState, h: DbHandles, embedder: Embedder): Promise<void> {
+export async function pollLoop(tg: Telegram, auth: AuthContext, state: BridgeState, h: DbHandles, embedder: Embedder, sessions: ChatSessions, signal: AbortSignal): Promise<void> {
   // Pre-build dedup deps once; null when memory is unavailable (channel-only).
   const replyDeps = makeEnqueueReplyDeps(h);
 
-  while (true) {
+  while (!signal.aborted) {
     let updates: TgUpdate[] = [];
     try {
-      updates = await tg.getUpdates(state.lastUpdateId + 1);
+      updates = await tg.getUpdates(state.lastUpdateId + 1, 30, signal);
     } catch (e: any) {
+      if (signal.aborted) break;
       console.error(`[bridge] getUpdates error: ${e?.message}; retrying in 5s`);
       await sleep(5000);
       continue;
     }
     for (const u of updates) {
+      if (signal.aborted) break;
       state.lastUpdateId = Math.max(state.lastUpdateId, u.update_id);
       const chatId = u.message?.chat?.id ?? u.callback_query?.message?.chat?.id;
       if (chatId === undefined) continue;
@@ -535,12 +503,13 @@ async function pollLoop(tg: Telegram, auth: AuthContext, state: BridgeState, h: 
       // chat has no pending card, but we still gate to be safe.
       try {
         if (u.message && hasHandleableContent(u.message)) {
-          await handleInbound(tg, auth, state, h, embedder, chatId, u.message);
+          await handleInbound(tg, auth, state, h, embedder, chatId, u.message, sessions);
         } else if (u.callback_query?.data && u.callback_query.message) {
           if (!isAuthorized(auth, chatId)) { console.log(`[bridge] chat ${chatId}: callback dropped (unbound, lockdown)`); continue; }
-          await handleCallback(tg, state, h, embedder, chatId, u.callback_query.id, u.callback_query.data, u.callback_query.message.message_id);
+          await handleCallback(tg, state, h, embedder, chatId, u.callback_query.id, u.callback_query.data, u.callback_query.message.message_id, sessions);
         }
       } catch (e: any) {
+        if (signal.aborted) break;
         console.error(`[bridge] handler error: ${e?.message}`);
         if (isAuthorized(auth, chatId)) {
           const errMsg = `⚠️ Something went wrong handling that: ${e?.message ?? e}`;
@@ -563,17 +532,6 @@ async function pollLoop(tg: Telegram, auth: AuthContext, state: BridgeState, h: 
 }
 
 function sleep(ms: number): Promise<void> { return new Promise((r) => setTimeout(r, ms)); }
-
-/** Shows Telegram's native "typing…" indicator (refreshed every 4s) while `fn` runs. */
-async function withTyping<T>(tg: Telegram, chatId: number, fn: () => Promise<T>): Promise<T> {
-  await tg.sendChatAction(chatId, 'typing').catch(() => {});
-  const iv = setInterval(() => tg.sendChatAction(chatId, 'typing').catch(() => {}), 4000);
-  try {
-    return await fn();
-  } finally {
-    clearInterval(iv);
-  }
-}
 
 // --- main ---
 
@@ -606,7 +564,18 @@ async function main(): Promise<void> {
 
   console.log(`[bridge] up. bootstrap=${bootstrap.size}, bindings=${store.list('telegram').length}, bindingsDb=${BINDINGS_DB_PATH}`);
   // Proactive wakes are now handled by @justfortytwo/scheduler (external daemon).
-  await pollLoop(tg, auth, state, h, embedder);
+  const sessions = createBridgeSessions(tg, state, h, embedder);
+  const controller = new AbortController();
+  const shutdown = () => { controller.abort(); void sessions.closeAll(); };
+  process.once('SIGINT', shutdown);
+  process.once('SIGTERM', shutdown);
+  try { await pollLoop(tg, auth, state, h, embedder, sessions, controller.signal); }
+  finally {
+    controller.abort();
+    await sessions.closeAll();
+    process.off('SIGINT', shutdown);
+    process.off('SIGTERM', shutdown);
+  }
 }
 
 // Run only when invoked directly (the bin / node dist/bridge.js), not when
@@ -617,4 +586,10 @@ function invokedAsBin(): boolean {
   try { return realpathSync(argv1) === realpathSync(fileURLToPath(import.meta.url)); }
   catch { return false; }
 }
-if (invokedAsBin()) main();
+// main() resolves only after polling stopped and closeAll() awaited every Claude
+// process and queued delivery. Exit naturally so piped stdout/stderr can flush; the
+// unref'd timer forces exit only if an unrelated handle would keep the process up.
+if (invokedAsBin()) {
+  main().then(() => { process.exitCode = 0; }, (e) => { console.error('[bridge] fatal:', e); process.exitCode = 1; })
+    .finally(() => { setTimeout(() => process.exit(), 2000).unref(); });
+}

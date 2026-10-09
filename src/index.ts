@@ -1,12 +1,12 @@
 // @justfortytwo/telegram — public API.
 //
 // The Telegram channel adapter for fortytwo: a long-polling bridge that
-// drives a headless `claude` turn loop per chat, surfaces gate approvals as
+// maintains a persistent Claude Code session per active chat, surfaces gate approvals as
 // inline keyboards, and gates inbound access behind a login/pairing binding flow.
 //
-// Peer packages (declared in peerDependencies, NOT bundled):
-//   - @justfortytwo/memory  (MEMORY_TOOL_CONTRACT_VERSION, tools mcp__fortytwo-memory__*)
-//   - @justfortytwo/gate  (POLICY_SCHEMA_VERSION)
+// fortytwo packages (referenced, NOT bundled):
+//   - @justfortytwo/memory  optional peer (MEMORY_TOOL_CONTRACT_VERSION, tools mcp__fortytwo-memory__*)
+//   - @justfortytwo/gate    dependency: provenance envelopes (POLICY_SCHEMA_VERSION)
 // See src/bridge.ts for the `// TODO(wire):` seams where these are wired.
 
 // --- Channel transport (owned) ---

@@ -4,9 +4,10 @@
 
 const API = (token: string) => `https://api.telegram.org/bot${token}`;
 
-async function tg(token: string, method: string, body: Record<string, unknown>): Promise<any> {
+async function tg(token: string, method: string, body: Record<string, unknown>, signal?: AbortSignal): Promise<any> {
   const res = await fetch(`${API(token)}/${method}`, {
     method: 'POST',
+    signal,
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
   });
@@ -117,8 +118,8 @@ export class Telegram {
   }
 
   /** Long-poll for updates. Pass offset = lastUpdateId + 1 to acknowledge. */
-  getUpdates(offset: number, timeoutSec = 30): Promise<TgUpdate[]> {
-    return tg(this.token, 'getUpdates', { offset, timeout: timeoutSec, allowed_updates: ['message', 'callback_query'] });
+  getUpdates(offset: number, timeoutSec = 30, signal?: AbortSignal): Promise<TgUpdate[]> {
+    return tg(this.token, 'getUpdates', { offset, timeout: timeoutSec, allowed_updates: ['message', 'callback_query'] }, signal);
   }
 
   sendMessage(chatId: number, text: string, replyMarkup?: Record<string, unknown>): Promise<{ message_id: number }> {
