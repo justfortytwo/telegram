@@ -535,6 +535,18 @@ function sleep(ms: number): Promise<void> { return new Promise((r) => setTimeout
 
 // --- main ---
 
+/**
+ * Startup notice for the fresh-install state (no ALLOWED_CHAT_IDS, no bindings).
+ * This is NOT fatal: the bridge runs locked down, every unbound sender is
+ * dropped, and the only way in is `/login <code>` with a valid pending
+ * challenge (e.g. minted by `fortytwo pair`). Returns null when some chat is
+ * already authorized.
+ */
+export function pairingOnlyStartupNotice(bootstrapSize: number, bindingCount: number): string | null {
+  if (bootstrapSize > 0 || bindingCount > 0) return null;
+  return '[bridge] no ALLOWED_CHAT_IDS and no bindings yet: running locked down, waiting for /login <code> (mint one with `fortytwo pair`).';
+}
+
 async function main(): Promise<void> {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   const bootstrap = parseAllowed(process.env.ALLOWED_CHAT_IDS);
@@ -542,7 +554,8 @@ async function main(): Promise<void> {
   // NOTE: unlike the monolith, ALLOWED_CHAT_IDS is now an OPTIONAL bootstrap set,
   // not the sole authorization. The bot is still locked down: unbound senders get
   // no response and can only earn access via /login <code>. Starting with an empty
-  // bootstrap is allowed only if at least one binding already exists.
+  // bootstrap AND zero bindings is allowed: that is the fresh-install state in
+  // which the first chat pairs with a code minted by `fortytwo pair`.
 
   // Self-owned binding store (does not require @justfortytwo/memory's db).
   mkdirSync(dirname(BINDINGS_DB_PATH), { recursive: true });
@@ -550,10 +563,8 @@ async function main(): Promise<void> {
   const adapter = new TelegramAdapter(store);
   const auth: AuthContext = { adapter, bootstrap };
 
-  if (bootstrap.size === 0 && store.list('telegram').length === 0) {
-    console.error('[bridge] no ALLOWED_CHAT_IDS bootstrap and no existing bindings — nobody can reach the bridge. Set ALLOWED_CHAT_IDS or pre-seed a binding.');
-    process.exit(1);
-  }
+  const pairingNotice = pairingOnlyStartupNotice(bootstrap.size, store.list('telegram').length);
+  if (pairingNotice) console.log(pairingNotice);
 
   // Persist channel events to the memory store (optional peer; channel-only if absent).
   const dbPath = process.env.DB_PATH ? resolve(ROOT, process.env.DB_PATH) : resolve(ROOT, 'db', 'fortytwo.db');

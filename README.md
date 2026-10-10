@@ -80,9 +80,10 @@ channel side:  /login <code>                  ->  verify(chatId, code) -> bindin
   `(channelType, channelUserId) -> owner`.
 - `/logout` removes the binding and closes the live session (recovery IDs remain).
 - Every inbound message is authorized against **persisted bindings ∪ the
-  optional `ALLOWED_CHAT_IDS` bootstrap set**. The bootstrap set lets the first
-  owner chat reach the bridge before any binding exists; it is not required once
-  bindings exist.
+  optional `ALLOWED_CHAT_IDS` bootstrap set**. The bootstrap set lets a chat
+  reach the bridge without a binding; it is never required. On a fresh install
+  (no `ALLOWED_CHAT_IDS`, no bindings) the bridge still starts, locked down, and
+  the first chat pairs with `/login <code>` using a code from `fortytwo pair`.
 
 Pending challenges are **persisted in the binding store** (not in process
 memory), so a code minted by one process — e.g. the `fortytwo pair` CLI — is
@@ -141,7 +142,7 @@ exact-command allowlist remains a stub, as does the cross-process pending-decisi
 | Var | Required | Meaning |
 | --- | --- | --- |
 | `TELEGRAM_BOT_TOKEN` | yes | Bot token. The bridge is the **only** long-poller on this bot. |
-| `ALLOWED_CHAT_IDS` | bootstrap | Comma-separated chat IDs allowed before any binding exists. Optional once bindings exist. |
+| `ALLOWED_CHAT_IDS` | no | Comma-separated chat IDs authorized without a binding. Not needed for first pairing: `/login <code>` works with zero bindings. |
 | `CLAUDE_BIN` | no | Path to the `claude` binary (default `claude`). |
 | `FORTYTWO_BASH_ALLOW_TTL_HOURS` | no | Default TTL (hours) for "Allow _N_h" bash approvals (default 8). |
 | `TELEGRAM_BINDINGS_DB` | no | Path to the self-owned bindings db (default `state/telegram-bindings.db`). |
@@ -165,9 +166,11 @@ exact-command allowlist remains a stub, as does the cross-process pending-decisi
 - The bridge **spawns the `claude` binary**, so Claude Code's `claude` must be on
   your `PATH` (or point `CLAUDE_BIN` at it).
 - It loads `config/adapters.toml` from `$FORTYTWO_ROOT/config/`.
-- On first run it **requires** `TELEGRAM_BOT_TOKEN` and either `ALLOWED_CHAT_IDS`
-  or a pre-existing binding — with no authorized chat to reach, the bridge exits
-  immediately rather than long-polling a bot nobody can talk to.
+- It **requires** `TELEGRAM_BOT_TOKEN`. With no `ALLOWED_CHAT_IDS` and no
+  bindings it starts locked down: every unbound sender is silently dropped, and
+  only `/login <code>` with a valid pending challenge (mint one with
+  `fortytwo pair`) creates the first binding. No pending challenge is needed for
+  the bridge to keep running.
 
 ```sh
 npm run build

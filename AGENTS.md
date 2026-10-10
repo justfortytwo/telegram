@@ -45,8 +45,8 @@ From `package.json` (Node >= 20, npm):
 - `npm test` - `vitest run`.
 - `npx vitest run test/login.test.ts` - single test file.
 - `npx tsc --noEmit` - typecheck only.
-- `node dist/bridge.js` - run the bridge (needs `TELEGRAM_BOT_TOKEN`, and `ALLOWED_CHAT_IDS`
-  or an existing binding, plus `claude` on PATH or `CLAUDE_BIN`).
+- `node dist/bridge.js` - run the bridge (needs `TELEGRAM_BOT_TOKEN`, plus `claude` on PATH or
+  `CLAUDE_BIN`; `ALLOWED_CHAT_IDS` is optional).
 
 No lint or format script is configured. CI (`.github/workflows/ci.yml`) calls the shared
 reusable workflow `justfortytwo/.github/.github/workflows/node-ci.yml@main` with
@@ -94,7 +94,9 @@ reusable workflow `justfortytwo/.github/.github/workflows/node-ci.yml@main` with
   mock `@justfortytwo/runner`, `@justfortytwo/memory` and parts of `node:fs` with `vi.mock`.
 - Do not create the runner at import time (lazy init was a deliberate fix).
 - The bridge must be the **only** long-poller on the bot token.
-- `main()` exits if there is no `ALLOWED_CHAT_IDS` and no stored binding.
+- With no `ALLOWED_CHAT_IDS` and no stored binding, `main()` still starts (locked down, logs
+  `pairingOnlyStartupNotice`); the first chat pairs via `/login <code>`. Do not reintroduce an
+  exit there: it breaks fresh-install pairing (`test/bridge-bootstrap.test.ts`).
 - When adding env vars that replace legacy `FORD_*` names, read them through `envCompat`.
 - `better-sqlite3` is a native module (^12 for Node 24 prebuilts).
 
