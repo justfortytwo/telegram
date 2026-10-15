@@ -195,3 +195,18 @@ MIT © 2026 Enrico Deleo
 ---
 
 Created and maintained by [**Enrico Deleo**](https://enricodeleo.com).
+
+### Typing indicator lifecycle
+
+Each chat owns one typing refresher while its live session has submitted turns
+awaiting results. Overlapping inputs keep it active until the last result; a
+result stops its turn's typing ownership before final-message delivery. Fatal
+session errors, exit, closed-input retirement, logout and shutdown cancel that
+session's pending typing work. A rejected input releases only its own turn.
+Approval cards finish the current turn; approval submits a new turn through the
+same lifecycle. Non-fatal runner diagnostics do not finish a pending turn.
+
+Typing is not a turn timeout: silent but pending work keeps refreshing, while
+late output cannot restart typing after the last result. Once pending work is
+zero, the bridge sends no further typing refreshes; an action already sent can
+remain visible briefly until Telegram expires it.

@@ -5,6 +5,7 @@ import { ChatSessions } from '../src/chat-sessions.js';
 class FakeSession extends EventEmitter {
   sessionId?: string;
   state = 'ready';
+  lastActivityAt = Date.now();
   send = vi.fn(async (_text: string) => {});
   close = vi.fn(async () => { this.emit('event', { type: 'exit', code: 0, signal: null }); });
   event(event: any) { this.emit('event', event); }
@@ -212,12 +213,12 @@ describe('repaired edge cases', () => {
     await expect(f.manager.send(1, 'A')).rejects.toThrow('spawn failed');
     await expect(f.manager.close(1)).resolves.toBeUndefined();
   });
-  it('stops refreshing typing for a silent session without ending the turn', async () => {
+  it('keeps refreshing a genuinely pending silent turn until its terminal result', async () => {
     vi.useFakeTimers(); const f = setup();
     await f.manager.send(1, 'A');
     (f.sessions[0] as any).lastActivityAt = Date.now();
     await vi.advanceTimersByTimeAsync(6 * 60_000);
-    expect(vi.getTimerCount()).toBe(0);
+    expect(vi.getTimerCount()).toBe(1);
     (f.sessions[0] as any).lastActivityAt = Date.now();
     f.sessions[0].event({ type: 'assistant', text: 'late', raw: {} });
     expect(vi.getTimerCount()).toBe(2);
@@ -252,5 +253,114 @@ describe('overlapping turns', () => {
     expect(f.tg.sendMessage.mock.calls.map(c => c[1])).toEqual(['reply A', 'reply B']);
     expect(f.onResult).toHaveBeenCalledTimes(2);
     await f.manager.closeAll();
+  });
+});
+
+
+describe('typing ownership', () => {
+  it('stops refreshes at the final result before delivery finishes; late events cannot restart it', async () => {
+    vi.useFakeTimers(); const f = setup();
+    await f.manager.send(1, 'A');
+    expect(f.tg.sendChatAction).toHaveBeenCalledWith(1, 'typing');
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(f.tg.sendChatAction).toHaveBeenCalledTimes(2);
+    let release!: () => void;
+    f.onResult.mockImplementationOnce(() => new Promise<void>(r => { release = r; }));
+    f.sessions[0].event(result('delivered'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(12000);
+    expect(f.tg.sendChatAction).toHaveBeenCalledTimes(2);
+    release(); await f.manager.drain(1);
+    expect(f.tg.sendMessage).toHaveBeenCalledWith(1, 'delivered');
+    f.sessions[0].event({ type: 'assistant', text: 'late output', raw: {} });
+    await vi.advanceTimersByTimeAsync(8000);
+    expect(f.tg.sendChatAction).toHaveBeenCalledTimes(2);
+    await f.manager.closeAll();
+  });
+
+  it('cancels the old typing owner on closed-input retry, including after it leaves the retired set', async () => {
+    vi.useFakeTimers(); const f = setup();
+    await f.manager.send(1, 'A');
+    const old = f.sessions[0];
+    old.send.mockRejectedValueOnce(Object.assign(new Error('input closed'), { name: 'RunnerClosedError' }));
+    await f.manager.send(1, 'B');
+    expect(f.sessions).toHaveLength(2);
+    expect(vi.getTimerCount()).toBe(1); // only replacement owns typing
+    f.sessions[1].event(result('reply B'));
+    await f.manager.drain(1);
+    expect(f.tg.sendMessage).toHaveBeenCalledWith(1, 'reply B');
+    const count = f.tg.sendChatAction.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(12000);
+    expect(f.tg.sendChatAction).toHaveBeenCalledTimes(count);
+    expect(vi.getTimerCount()).toBe(0);
+    await f.manager.closeAll();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('does not leave an old timer when replacement creation fails', async () => {
+    vi.useFakeTimers(); const f = setup(); await f.manager.send(1, 'A');
+    f.sessions[0].send.mockRejectedValueOnce(Object.assign(new Error('input closed'), { name: 'RunnerClosedError' }));
+    f.runner.createSession.mockRejectedValueOnce(new Error('spawn failed'));
+    await expect(f.manager.send(1, 'B')).rejects.toThrow('spawn failed');
+    const count = f.tg.sendChatAction.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(12000);
+    expect(f.tg.sendChatAction).toHaveBeenCalledTimes(count);
+    expect(vi.getTimerCount()).toBe(0);
+    await f.manager.closeAll();
+  });
+
+  it('retires a closed replacement even when the one retry is exhausted', async () => {
+    vi.useFakeTimers(); const f = setup(); await f.manager.send(1, 'A');
+    const closed = () => Object.assign(new Error('input closed'), { name: 'RunnerClosedError' });
+    f.sessions[0].send.mockRejectedValueOnce(closed());
+    const replacement = new FakeSession();
+    replacement.send.mockRejectedValueOnce(closed());
+    f.runner.createSession.mockResolvedValueOnce(replacement);
+    await expect(f.manager.send(1, 'B')).rejects.toThrow('input closed');
+    expect(replacement.close).toHaveBeenCalledTimes(1);
+    const count = f.tg.sendChatAction.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(8000);
+    expect(f.tg.sendChatAction).toHaveBeenCalledTimes(count);
+    expect(vi.getTimerCount()).toBe(0);
+    await f.manager.closeAll();
+  });
+
+  it.each(['error', 'exit', 'rejected', 'failed result'])('stops refreshing after %s', async terminal => {
+    vi.useFakeTimers(); const f = setup();
+    if (terminal === 'rejected') {
+      const session = new FakeSession();
+      session.send.mockRejectedValueOnce(new TypeError('invalid'));
+      f.runner.createSession.mockResolvedValueOnce(session);
+      await expect(f.manager.send(1, 'A')).rejects.toThrow('invalid');
+    } else {
+      await f.manager.send(1, 'A');
+      if (terminal === 'error') {
+        f.sessions[0].state = 'failed';
+        f.sessions[0].event({ type: 'error', error: new Error('failed') });
+      } else if (terminal === 'exit') f.sessions[0].event({ type: 'exit', code: 1 });
+      else f.sessions[0].event({ type: 'result', result: { ok: false, text: '', raw: {} } });
+    }
+    const count = f.tg.sendChatAction.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(12000);
+    expect(f.tg.sendChatAction).toHaveBeenCalledTimes(count);
+    expect(vi.getTimerCount()).toBe(0);
+    await f.manager.closeAll();
+  });
+
+  it.each(['logout', 'shutdown'])('stops refreshing during %s even while session close is blocked', async mode => {
+    vi.useFakeTimers(); const f = setup();
+    await f.manager.send(1, 'A'); await f.manager.send(1, 'B');
+    let release!: () => void;
+    f.sessions[0].close.mockImplementationOnce(() => new Promise<void>(r => { release = r; }));
+    const closing = mode === 'shutdown' ? f.manager.closeAll() : f.manager.close(1);
+    const count = f.tg.sendChatAction.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(12000);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(f.tg.sendChatAction).toHaveBeenCalledTimes(count);
+    f.sessions[0].event({ type: 'assistant', text: 'late', raw: {} });
+    f.sessions[0].event(result());
+    expect(vi.getTimerCount()).toBe(0);
+    release(); await closing; await f.manager.closeAll();
   });
 });

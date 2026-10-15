@@ -68,6 +68,27 @@ describe('bridge dispatch', () => {
     await f.approve();
     expect(f.runner.createSession).toHaveBeenLastCalledWith({ resumeSessionId: 'pending-id' });
   });
+  it('stops typing at an approval card and owns a new pending turn only after approval', async () => {
+    vi.useFakeTimers(); const f = setup();
+    try {
+      await f.inbound('A');
+      expect(f.tg.sendChatAction).toHaveBeenCalledTimes(1);
+      f.sessions[0].result('', { stop_reason: 'tool_deferred', deferred_tool_use: { id: 't', name: 'Bash', input: { command: 'ls' } } });
+      await f.manager.drain(1);
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(8000);
+      expect(f.tg.sendChatAction).toHaveBeenCalledTimes(1);
+      await f.approve();
+      expect(f.runner.createSession).toHaveBeenCalledTimes(1);
+      expect(f.tg.sendChatAction).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(4000);
+      expect(f.tg.sendChatAction).toHaveBeenCalledTimes(3);
+      f.sessions[0].result('approved reply'); await f.manager.drain(1);
+      await vi.advanceTimersByTimeAsync(8000);
+      expect(f.tg.sendChatAction).toHaveBeenCalledTimes(3);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { await f.manager.closeAll(); vi.useRealTimers(); }
+  });
   it('persists discovered IDs and gate cards asynchronously', async () => {
     const f = setup(); await f.inbound('A');
     f.sessions[0].sessionId = 'discovered';

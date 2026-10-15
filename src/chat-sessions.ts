@@ -1,7 +1,6 @@
 import type { Runner, RunnerEvent, RunnerSession, RunResult } from '@justfortytwo/runner';
 import type { Telegram } from './telegram.js';
 
-const TYPING_IDLE_MS = 5 * 60_000;
 type Transport = Pick<Telegram, 'sendMessage' | 'editMessageText' | 'sendChatAction'>;
 interface Output { text: string; messages: { id: number; text: string }[] }
 interface ChatSession {
@@ -62,16 +61,16 @@ export class ChatSessions {
     const chat = await entry;
     if (this.stopped || this.closing.has(chatId) || chat.closed) throw new Error('Chat sessions are closed');
     chat.pending++;
-    this.startTyping(chatId, chat);
+    if (chat.pending === 1) this.startTyping(chatId, chat);
     try { await chat.session.send(prompt); }
     catch (error) {
       chat.pending = Math.max(0, chat.pending - 1);
       if (!chat.pending) this.stopTimers(chat);
       // The process died before its exit event was observed: retire it and resume once.
       // Matched by name so tests can mock the runner module without its error classes.
-      if (retry && (error as Error)?.name === 'RunnerClosedError' && !this.stopped && !this.closing.has(chatId) && !chat.closed) {
+      if ((error as Error)?.name === 'RunnerClosedError' && !this.stopped && !this.closing.has(chatId) && !chat.closed) {
         if (this.chats.get(chatId) === entry) this.retire(chatId, chat, true);
-        return this.send(chatId, prompt, fallbackId, false);
+        if (retry) return this.send(chatId, prompt, fallbackId, false);
       }
       // Dispatch reports a rejected send. Events report asynchronous failures.
       throw error;
@@ -101,7 +100,6 @@ export class ChatSessions {
         // Runner emits complete assistant messages, not token deltas or cumulative snapshots.
         const output = chat.output;
         output.text += (output.text ? '\n\n' : '') + event.text;
-        if (chat.pending) this.startTyping(chatId, chat);
         if (!chat.flush) chat.flush = setTimeout(() => {
           chat.flush = undefined;
           this.queue(chat, () => this.render(chatId, chat, output));
@@ -147,6 +145,10 @@ export class ChatSessions {
   }
 
   private retire(chatId: number, chat: ChatSession, terminate = false): void {
+    // Detached sessions cannot receive terminal events. Cancel their pending
+    // presentation work before removing the listener, including closed-input retry.
+    chat.pending = 0;
+    this.stopTimers(chat);
     this.chats.delete(chatId);
     chat.session.off('event', chat.listener);
     chat.termination = terminate ? chat.session.close() : Promise.resolve();
@@ -172,16 +174,22 @@ export class ChatSessions {
   private startTyping(chatId: number, chat: ChatSession): void {
     if (chat.typing) return;
     const refresh = () => {
-      // Indicator only, not a turn timeout: stop refreshing a silent session so a
-      // missing result cannot keep typing forever. Assistant output restarts it.
-      if (Date.now() - chat.session.lastActivityAt > TYPING_IDLE_MS) { clearInterval(chat.typing); chat.typing = undefined; return; }
+      // Only submitted work owns typing. Late output and detached sessions must
+      // not refresh it; an in-flight Telegram action may still expire naturally.
+      if (!chat.pending || chat.closed || chat.termination || this.stopped || this.closing.has(chatId)) {
+        this.stopTyping(chat);
+        return;
+      }
       void this.tg.sendChatAction(chatId, 'typing').catch(() => {});
     };
-    refresh();
     chat.typing = setInterval(refresh, 4000);
+    refresh();
+  }
+  private stopTyping(chat: ChatSession): void {
+    clearInterval(chat.typing); chat.typing = undefined;
   }
   private stopTimers(chat: ChatSession): void {
-    clearInterval(chat.typing); chat.typing = undefined;
+    this.stopTyping(chat);
     clearTimeout(chat.flush); chat.flush = undefined;
   }
 
@@ -222,6 +230,7 @@ export class ChatSessions {
       const chats = live ? [...retiring, live] : retiring;
       await Promise.all(chats.map(async chat => {
         chat.closed = true;
+        chat.pending = 0;
         this.stopTimers(chat);
         chat.session.off('event', chat.listener);
         chat.termination ??= chat.session.close();
