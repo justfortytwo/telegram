@@ -300,7 +300,7 @@ async function respond(tg: Telegram, h: DbHandles, embedder: Embedder, state: Br
 }
 
 export async function handleInbound(tg: Telegram, auth: AuthContext, state: BridgeState, h: DbHandles, embedder: Embedder, chatId: number, message: TgMessage, sessions: ChatSessions): Promise<void> {
-  const text = message.text ?? '';
+  const text = message.text ?? message.caption ?? '';
 
   // --- AUTH GATE (lockdown) -------------------------------------------------
   // Auth commands (/login, /logout) and the unbound-sender drop are handled
