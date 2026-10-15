@@ -166,25 +166,6 @@ export class Telegram {
   }
 }
 
-export interface ApprovalKeyboardOptions {
-  bashTtlHours?: number;
-}
-
-/** Inline approval keyboard, keyed by tool_use_id. Bash gets a TTL allowlist option. */
-export function approvalKeyboard(toolUseId: string, opts: ApprovalKeyboardOptions = {}): Record<string, unknown> {
-  const row = opts.bashTtlHours
-    ? [
-      { text: 'Run once', callback_data: `approve_once:${toolUseId}` },
-      { text: `Allow ${opts.bashTtlHours}h`, callback_data: `approve_ttl:${toolUseId}` },
-      { text: 'Deny', callback_data: `deny:${toolUseId}` },
-    ]
-    : [
-      { text: 'Approve', callback_data: `approve_once:${toolUseId}` },
-      { text: 'Deny', callback_data: `deny:${toolUseId}` },
-    ];
-  return { inline_keyboard: [row] };
-}
-
 /** Parse "12345, -100999" → Set<number>. */
 export function parseAllowed(raw: string | undefined): Set<number> {
   if (!raw) return new Set();

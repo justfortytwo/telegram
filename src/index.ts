@@ -1,19 +1,17 @@
 // @justfortytwo/telegram — public API.
 //
 // The Telegram channel adapter for fortytwo: a long-polling bridge that
-// maintains a persistent Claude Code session per active chat, surfaces gate approvals as
-// inline keyboards, and gates inbound access behind a login/pairing binding flow.
+// maintains a persistent Claude Code session per active chat and authorizes inbound
+// access through login/pairing. Tool permissions belong to Claude Code.
 //
 // fortytwo packages (referenced, NOT bundled):
 //   - @justfortytwo/memory  optional peer (MEMORY_TOOL_CONTRACT_VERSION, tools mcp__fortytwo-memory__*)
 //   - @justfortytwo/gate    dependency: provenance envelopes (POLICY_SCHEMA_VERSION)
-// See src/bridge.ts for the `// TODO(wire):` seams where these are wired.
 
 // --- Channel transport (owned) ---
 export {
   Telegram,
   parseAllowed,
-  approvalKeyboard,
   messageAttachmentSpecs,
   largestPhoto,
   formatTelegramHtml,
@@ -22,7 +20,6 @@ export {
   type PhotoSize,
   type TgDocument,
   type AttachmentSpec,
-  type ApprovalKeyboardOptions,
 } from './telegram.js';
 
 // --- Attachments (owned; depends on @justfortytwo/gate's provenance contract) ---
@@ -79,7 +76,6 @@ export {
 // --- Bridge turn-loop primitives (owned; pure decision logic is testable) ---
 export {
   interpretResult,
-  formatApprovalCard,
   telegramSourceKind,
   hasHandleableContent,
   telegramCommandReply,

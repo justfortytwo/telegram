@@ -8,12 +8,12 @@ Code sessions through `@justfortytwo/runner`.
    After authorization, attachment ingestion and optional journaling, input waits
    only for `session.send()` to write it. Polling continues while Claude works;
    another message goes to the same session immediately after preprocessing.
-2. **Output and approvals.** Complete assistant-message events are coalesced into
+2. **Output and deferrals.** Complete assistant-message events are coalesced into
    an evolving Telegram reply, edited at most once per second during streaming.
    A result finalizes the reply; long replies use additional messages of at most
    4000 UTF-16 units. Typing refreshes while submitted inputs await results.
-   Existing gate deferrals produce approval cards. Approving sends the existing
-   continuation prompt to the live session, or recreates it using a saved ID.
+   Deferred results produce a plain notice: Telegram cannot authorize the action.
+   Claude Code owns tool permissions; Gate is optional policy through Claude hooks/plugins.
 3. **Scheduler separation.** Proactive wakes remain the responsibility of the
    external `@justfortytwo/scheduler` daemon.
 
@@ -41,8 +41,8 @@ streaming, and concurrent inputs share the session's output stream.
 
 SIGINT/SIGTERM abort polling, stop new session work and deterministically close
 live RunnerSessions. `/logout` closes the chat's live process and removes its
-binding, while retaining durable conversation IDs and existing pending approval
-recovery data. The existing `ALLOWED_CHAT_IDS` bootstrap authorization still applies
+binding, while retaining durable conversation IDs and tolerating inert legacy
+approval-card state. The existing `ALLOWED_CHAT_IDS` bootstrap authorization still applies
 independently of bindings.
 
 The runner dependency is pinned to the published prerelease
@@ -120,8 +120,8 @@ dynamically, and it is also a devDependency so types and tests resolve.
 
 | Package | Used for | Contract |
 | --- | --- | --- |
-| `@justfortytwo/memory` | Memory store, jobs, pending-decision records, embeddings | `MEMORY_TOOL_CONTRACT_VERSION` (tools `mcp__fortytwo-memory__*`) |
-| `@justfortytwo/gate` | Bash exact-command allowlist behind "Allow _N_h"; provenance envelopes | `POLICY_SCHEMA_VERSION` |
+| `@justfortytwo/memory` | Memory store, jobs, embeddings | `MEMORY_TOOL_CONTRACT_VERSION` (tools `mcp__fortytwo-memory__*`) |
+| `@justfortytwo/gate` | Provenance envelopes (policy hook configured separately) | `POLICY_SCHEMA_VERSION` |
 
 Install memory alongside this package to enable persistence:
 
@@ -133,9 +133,8 @@ The **memory** data path is wired: the bridge opens + migrates the memory DB at
 startup and **persists each channel event** to `@justfortytwo/memory`; recall
 happens inside the headless `claude` turn via the Memory MCP tools. If the memory
 peer is absent, the bridge degrades to **channel-only** (messages relay but are
-not persisted) rather than refusing to start. The **gate** "Allow _N_h" path
-still uses a local placeholder; wiring it to `@justfortytwo/gate`'s
-exact-command allowlist remains a stub, as does the cross-process pending-decision write. This migration preserves those existing seams; it does not implement gate permissions.
+not persisted) rather than refusing to start. Telegram does not record tool
+authorizations or update Gate approval stores.
 
 ## Environment
 
@@ -144,7 +143,6 @@ exact-command allowlist remains a stub, as does the cross-process pending-decisi
 | `TELEGRAM_BOT_TOKEN` | yes | Bot token. The bridge is the **only** long-poller on this bot. |
 | `ALLOWED_CHAT_IDS` | no | Comma-separated chat IDs authorized without a binding. Not needed for first pairing: `/login <code>` works with zero bindings. |
 | `CLAUDE_BIN` | no | Path to the `claude` binary (default `claude`). |
-| `FORTYTWO_BASH_ALLOW_TTL_HOURS` | no | Default TTL (hours) for "Allow _N_h" bash approvals (default 8). |
 | `TELEGRAM_BINDINGS_DB` | no | Path to the self-owned bindings db (default `state/telegram-bindings.db`). |
 | `DB_PATH` | no | Path to the memory DB the bridge opens/migrates at startup (default `db/fortytwo.db`, relative to `FORTYTWO_ROOT`). |
 | `EMBED_MODEL` | no | When set, the bridge uses the Ollama embedder for memory (otherwise a deterministic fallback). |
@@ -152,9 +150,7 @@ exact-command allowlist remains a stub, as does the cross-process pending-decisi
 | `ASSISTANT_NAME` / `ASSISTANT_ACTOR` / `OWNER_ACTOR` | no | Display name + journal actor labels. |
 | `FORTYTWO_ROOT` | no | Working root for the headless `claude` process + state files. |
 
-> The historical `FORD_*` names (`FORD_ROOT`,
-> `FORD_BASH_ALLOW_TTL_HOURS`) are still honored as deprecated aliases — set the
-> `FORTYTWO_*` equivalents in new deployments.
+> `FORD_ROOT` remains a deprecated alias for `FORTYTWO_ROOT`.
 
 > Proxy auth for the headless `claude` session is **not** read here — the
 > `claude` CLI reads `ANTHROPIC_*` from its own config.
@@ -203,10 +199,30 @@ awaiting results. Overlapping inputs keep it active until the last result; a
 result stops its turn's typing ownership before final-message delivery. Fatal
 session errors, exit, closed-input retirement, logout and shutdown cancel that
 session's pending typing work. A rejected input releases only its own turn.
-Approval cards finish the current turn; approval submits a new turn through the
-same lifecycle. Non-fatal runner diagnostics do not finish a pending turn.
+Deferred results finish their submitted turn without starting another. Legacy
+approval callbacks cannot restart typing. Non-fatal runner diagnostics do not
+finish a pending turn.
 
 Typing is not a turn timeout: silent but pending work keeps refreshing, while
 late output cannot restart typing after the last result. Once pending work is
 zero, the bridge sends no further typing refreshes; an action already sent can
 remain visible briefly until Telegram expires it.
+
+## Release notes — 1.0.0-4
+
+Telegram no longer offers approval buttons for deferred tools. Claude Code's effective permissions remain authoritative for tool execution.
+Gate enforcement is optional through an explicitly
+configured Claude hook/plugin. Conversational confirmation is not durable tool authorization.
+
+**Intentional public API change:** removed `approvalKeyboard`,
+`ApprovalKeyboardOptions`, and `formatApprovalCard`. Consumers importing these
+exports must remove those imports. Deferred-result recognition remains available.
+The obsolete `FORTYTWO_BASH_ALLOW_TTL_HOURS` and `FORD_BASH_ALLOW_TTL_HOURS`
+settings are no longer read.
+
+Old buttons only report that the control is unsupported and no authorization was
+recorded. They never submit a Claude turn or change approval state. Legacy
+`pending` data is tolerated but never used for authorization. Bindings, session
+IDs/resume, conversation history, and attachment provenance are preserved; the
+Gate library dependency remains required for provenance. Gate's standalone
+hook/plugin and memory's approval/audit schema are unchanged.

@@ -18,7 +18,7 @@ interface ChatSession {
 interface Hooks {
   ids: Record<number, string>;
   persist(): void;
-  /** Journaling and gate compatibility stay in the bridge. Return true for a gate card. */
+  /** Journaling and deferred notices stay in the bridge. Return true if already delivered. */
   onResult(chatId: number, result: RunResult, text: string): Promise<boolean | void>;
 }
 
@@ -124,8 +124,8 @@ export class ChatSessions {
         // Journal the authoritative final reply, as the one-shot bridge did.
         const reply = final || output.text;
         this.queue(chat, async () => {
-          const gate = await this.hooks.onResult(chatId, event.result, reply);
-          if (!gate) await this.render(chatId, chat, output);
+          const handled = await this.hooks.onResult(chatId, event.result, reply);
+          if (!handled) await this.render(chatId, chat, output);
         });
         break;
       }

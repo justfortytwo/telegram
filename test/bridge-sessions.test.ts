@@ -57,39 +57,56 @@ describe('bridge dispatch', () => {
     expect(f.sessions[0].send).toHaveBeenCalledTimes(1);
     await f.inbound('/start'); expect(f.runner.createSession).toHaveBeenCalledTimes(1);
   });
-  it('approval reuses a live session and recovers from pending ID after exit', async () => {
+  it.each(['approve', 'approve_once', 'approve_ttl', 'deny'])('legacy %s callbacks are inert, including after exit and shutdown', async action => {
     const f = setup(); await f.inbound('A');
     f.state.pending[1] = { toolUseId: 't', sessionId: 'pending-id' };
-    await f.approve();
+    const before = JSON.stringify(f.state);
+    mocks.write.mockClear(); mocks.store.mockClear();
+    const callback = () => handleCallback(f.tg, f.state, null, null, 1, 'cb', `${action}:t`, 77, f.manager);
+    await callback();
+    f.sessions[0].emit('event', { type: 'exit', code: 0, signal: null });
+    await callback();
+    await f.manager.closeAll();
+    await callback();
     expect(f.runner.createSession).toHaveBeenCalledTimes(1);
-    expect(f.sessions[0].send).toHaveBeenLastCalledWith('Approved - proceed with the deferred action now.');
-    f.sessions[0].emit('event', { type: 'exit', code: 1, signal: null });
-    f.state.pending[1] = { toolUseId: 't', sessionId: 'pending-id' };
-    await f.approve();
-    expect(f.runner.createSession).toHaveBeenLastCalledWith({ resumeSessionId: 'pending-id' });
+    expect(f.sessions[0].send.mock.calls).toEqual([['A']]);
+    expect(JSON.stringify(f.state)).toBe(before);
+    expect(mocks.write).not.toHaveBeenCalled();
+    expect(mocks.store).not.toHaveBeenCalled();
+    expect(f.tg.editMessageText).not.toHaveBeenCalled();
+    expect(f.tg.answerCallbackQuery).toHaveBeenCalledTimes(3);
+    expect(f.tg.answerCallbackQuery).toHaveBeenLastCalledWith('cb', 'This approval control is no longer supported. No authorization was recorded.');
   });
-  it('stops typing at an approval card and owns a new pending turn only after approval', async () => {
+  it('stops typing on deferral and late callbacks cannot restart it', async () => {
     vi.useFakeTimers(); const f = setup();
     try {
       await f.inbound('A');
-      expect(f.tg.sendChatAction).toHaveBeenCalledTimes(1);
       f.sessions[0].result('', { stop_reason: 'tool_deferred', deferred_tool_use: { id: 't', name: 'Bash', input: { command: 'ls' } } });
       await f.manager.drain(1);
       expect(vi.getTimerCount()).toBe(0);
+      await f.approve();
       await vi.advanceTimersByTimeAsync(8000);
       expect(f.tg.sendChatAction).toHaveBeenCalledTimes(1);
-      await f.approve();
-      expect(f.runner.createSession).toHaveBeenCalledTimes(1);
-      expect(f.tg.sendChatAction).toHaveBeenCalledTimes(2);
-      await vi.advanceTimersByTimeAsync(4000);
-      expect(f.tg.sendChatAction).toHaveBeenCalledTimes(3);
-      f.sessions[0].result('approved reply'); await f.manager.drain(1);
-      await vi.advanceTimersByTimeAsync(8000);
-      expect(f.tg.sendChatAction).toHaveBeenCalledTimes(3);
+      expect(f.sessions[0].send.mock.calls).toEqual([['A']]);
       expect(vi.getTimerCount()).toBe(0);
     } finally { await f.manager.closeAll(); vi.useRealTimers(); }
   });
-  it('persists discovered IDs and gate cards asynchronously', async () => {
+  it('a deferred first turn keeps typing until the overlapping second turn completes', async () => {
+    vi.useFakeTimers(); const f = setup();
+    try {
+      await f.inbound('A'); await f.inbound('B');
+      f.sessions[0].result('', { stop_reason: 'tool_deferred' });
+      await f.manager.drain(1);
+      await vi.advanceTimersByTimeAsync(4000);
+      expect(f.tg.sendChatAction).toHaveBeenCalledTimes(2);
+      f.sessions[0].result('B reply'); await f.manager.drain(1);
+      expect(f.tg.sendMessage).toHaveBeenCalledWith(1, 'B reply');
+      await vi.advanceTimersByTimeAsync(8000);
+      expect(f.tg.sendChatAction).toHaveBeenCalledTimes(2);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { await f.manager.closeAll(); vi.useRealTimers(); }
+  });
+  it('preserves session IDs and reports deferrals without approval UI or pending state', async () => {
     const f = setup(); await f.inbound('A');
     f.sessions[0].sessionId = 'discovered';
     f.sessions[0].emit('event', { type: 'raw', data: {} });
@@ -97,8 +114,15 @@ describe('bridge dispatch', () => {
     expect(mocks.write).toHaveBeenCalledWith(expect.stringContaining('bridge-state.json'), expect.stringContaining('discovered'));
     f.sessions[0].result('', { stop_reason: 'tool_deferred', deferred_tool_use: { id: 't', name: 'Bash', input: { command: 'ls' } } });
     await f.manager.drain(1);
-    expect(f.state.pending[1]).toMatchObject({ toolUseId: 't', sessionId: 'discovered' });
-    expect(f.tg.sendMessage).toHaveBeenCalledWith(1, expect.stringContaining('APPROVAL'), expect.any(Object));
+    expect(f.state.pending).toEqual({});
+    expect(f.tg.sendMessage.mock.calls).toEqual([[1, 'Claude deferred this action. Telegram cannot authorize it. Resolve it through the configured Claude/Gate approval workflow.']]);
+  });
+  it('reports a deferred outcome even without tool details', async () => {
+    const f = setup(); await f.inbound('A');
+    f.sessions[0].result('', { stop_reason: 'tool_deferred' });
+    await f.manager.drain(1);
+    expect(f.tg.sendMessage).toHaveBeenCalledWith(1, expect.stringContaining('Telegram cannot authorize'));
+    expect(f.state.pending).toEqual({});
   });
   it('passes the memory override through runner options without timeout or global mutation', () => {
     const before = process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY;
