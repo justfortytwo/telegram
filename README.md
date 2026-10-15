@@ -17,6 +17,14 @@ Code sessions through `@justfortytwo/runner`.
 3. **Scheduler separation.** Proactive wakes remain the responsibility of the
    external `@justfortytwo/scheduler` daemon.
 
+## Release notes
+
+### 1.0.0-6
+
+Preserve Telegram photo and document captions in the same Claude turn as attachment
+details and in inbound memory/journal text. Message text takes precedence when present.
+Seven regression tests cover caption handling and existing attachment behavior.
+
 ## Session lifecycle and recovery
 
 The bridge owns the chat-to-session mapping. Runner owns the Claude process and
