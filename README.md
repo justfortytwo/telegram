@@ -202,18 +202,17 @@ Created and maintained by [**Enrico Deleo**](https://enricodeleo.com).
 
 ### Typing indicator lifecycle
 
-Each chat owns one typing refresher while its live session has submitted turns
-awaiting results. Overlapping inputs keep it active until the last result; a
-result stops its turn's typing ownership before final-message delivery. Fatal
-session errors, exit, closed-input retirement, logout and shutdown cancel that
-session's pending typing work. A rejected input releases only its own turn.
-Deferred results finish their submitted turn without starting another. Legacy
-approval callbacks cannot restart typing. Non-fatal runner diagnostics do not
-finish a pending turn.
+Each chat owns one typing refresher while Claude is working on submitted input.
+Sending a message turns it on; so does Claude consuming a queued input. Every
+result turns it off before final-message delivery, so messages sent mid-turn
+(steering, answered together in one result) cannot leave it stuck. Fatal
+session errors, exit, closed-input retirement, logout and shutdown cancel it. A
+rejected input releases typing only if it started it. Legacy approval callbacks
+cannot restart typing. Non-fatal runner diagnostics do not end a turn.
 
-Typing is not a turn timeout: silent but pending work keeps refreshing, while
-late output cannot restart typing after the last result. Once pending work is
-zero, the bridge sends no further typing refreshes; an action already sent can
+Typing is not a turn timeout: silent but active work keeps refreshing, while
+late output cannot restart typing after a result. Once no work is active, the
+bridge sends no further typing refreshes; an action already sent can
 remain visible briefly until Telegram expires it.
 
 ## Release notes — 1.0.0-4

@@ -20,6 +20,7 @@ function setup(ids: Record<number, string> = {}) {
   return { manager, runner, sessions, tg, onResult, persist, ids };
 }
 const result = (text = 'done') => ({ type: 'result', result: { ok: true, text, raw: {} }, raw: {} });
+const input = { type: 'input', raw: {} };
 afterEach(() => vi.useRealTimers());
 describe('persistent chat sessions', () => {
   it('creates once and delivers B before any result of A, including concurrent sends', async () => {
@@ -112,11 +113,27 @@ describe('lifecycle races and Telegram limits', () => {
     expect(session.send).not.toHaveBeenCalled();
     expect(session.close).toHaveBeenCalledTimes(1);
   });
-  it('keeps typing while another submitted input still awaits a result', async () => {
+  it('stops typing when one steered result answers several submitted inputs', async () => {
+    vi.useFakeTimers(); const f = setup();
+    await f.manager.send(1, 'A'); await f.manager.send(1, 'B'); await f.manager.send(1, 'C');
+    f.sessions[0].event(input); f.sessions[0].event(input); f.sessions[0].event(input);
+    f.sessions[0].event(result('ABC')); await f.manager.drain(1);
+    expect(vi.getTimerCount()).toBe(0);
+    const count = f.tg.sendChatAction.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(8000);
+    expect(f.tg.sendChatAction).toHaveBeenCalledTimes(count);
+    await f.manager.closeAll();
+  });
+  it('restarts typing when Claude picks up an input queued after the turn ended', async () => {
     vi.useFakeTimers(); const f = setup();
     await f.manager.send(1, 'A'); await f.manager.send(1, 'B');
+    f.sessions[0].event(input);
     f.sessions[0].event(result('A')); await f.manager.drain(1);
+    expect(vi.getTimerCount()).toBe(0);
+    const count = f.tg.sendChatAction.mock.calls.length;
+    f.sessions[0].event(input);
     expect(vi.getTimerCount()).toBe(1);
+    expect(f.tg.sendChatAction).toHaveBeenCalledTimes(count + 1);
     f.sessions[0].event(result('B')); await f.manager.drain(1);
     expect(vi.getTimerCount()).toBe(0);
     await f.manager.closeAll();
@@ -229,27 +246,27 @@ describe('repaired edge cases', () => {
 });
 
 describe('overlapping turns', () => {
-  // Relies on Claude Code emitting one result per submitted user turn.
-  it('send A, send B before result(A): one turn remains after result(A), none after result(B)', async () => {
+  it('send A, send B before result(A): each turn finalizes its own reply; typing follows the active turn', async () => {
     vi.useFakeTimers(); const f = setup();
     await f.manager.send(1, 'A');
     await f.manager.send(1, 'B');
     const session = f.sessions[0];
     expect(session.send.mock.calls).toEqual([['A'], ['B']]);
 
-    f.sessions[0].event(result('reply A')); await f.manager.drain(1);
-    // One active turn remains: typing keeps refreshing for B.
-    expect(vi.getTimerCount()).toBe(1);
+    session.event(input);
+    session.event(result('reply A')); await f.manager.drain(1);
+    // Turn A ended; B has not been consumed yet, so nothing is visibly working.
+    expect(vi.getTimerCount()).toBe(0);
     const actions = f.tg.sendChatAction.mock.calls.length;
-    await vi.advanceTimersByTimeAsync(4000);
-    expect(f.tg.sendChatAction.mock.calls.length).toBe(actions + 1);
 
-    f.sessions[0].event(result('reply B')); await f.manager.drain(1);
-    // No active turns remain: typing stopped, no timers left.
+    session.event(input);
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(f.tg.sendChatAction.mock.calls.length).toBe(actions + 2);
+
+    session.event(result('reply B')); await f.manager.drain(1);
     expect(vi.getTimerCount()).toBe(0);
     await vi.advanceTimersByTimeAsync(8000);
-    expect(f.tg.sendChatAction.mock.calls.length).toBe(actions + 1);
-    // Each result finalized its own reply message.
+    expect(f.tg.sendChatAction.mock.calls.length).toBe(actions + 2);
     expect(f.tg.sendMessage.mock.calls.map(c => c[1])).toEqual(['reply A', 'reply B']);
     expect(f.onResult).toHaveBeenCalledTimes(2);
     await f.manager.closeAll();

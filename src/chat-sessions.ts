@@ -6,7 +6,8 @@ interface Output { text: string; messages: { id: number; text: string }[] }
 interface ChatSession {
   session: RunnerSession;
   output: Output;
-  pending: number;
+  /** Claude is working on submitted input: on at send and consumed input, off at result. */
+  active: boolean;
   persistedId?: string;
   termination?: Promise<void>;
   typing?: ReturnType<typeof setInterval>;
@@ -36,7 +37,7 @@ export class ChatSessions {
     const existing = this.chats.get(chatId);
     if (existing) return existing;
     const creating = this.runner.createSession({ resumeSessionId: this.hooks.ids[chatId] ?? fallbackId }).then(async session => {
-      const chat: ChatSession = { session, output: { text: '', messages: [] }, pending: 0, persistedId: this.hooks.ids[chatId], delivery: Promise.resolve(), closed: false, listener: () => {} };
+      const chat: ChatSession = { session, output: { text: '', messages: [] }, active: false, persistedId: this.hooks.ids[chatId], delivery: Promise.resolve(), closed: false, listener: () => {} };
       chat.listener = event => {
         if (this.chats.get(chatId) === creating) this.event(chatId, chat, event);
       };
@@ -60,12 +61,12 @@ export class ChatSessions {
     const entry = this.getOrCreate(chatId, fallbackId);
     const chat = await entry;
     if (this.stopped || this.closing.has(chatId) || chat.closed) throw new Error('Chat sessions are closed');
-    chat.pending++;
-    if (chat.pending === 1) this.startTyping(chatId, chat);
+    const wasActive = chat.active;
+    this.activate(chatId, chat);
     try { await chat.session.send(prompt); }
     catch (error) {
-      chat.pending = Math.max(0, chat.pending - 1);
-      if (!chat.pending) this.stopTimers(chat);
+      // A rejected input releases typing only if it was the one that started it.
+      if (!wasActive) { chat.active = false; this.stopTimers(chat); }
       // The process died before its exit event was observed: retire it and resume once.
       // Matched by name so tests can mock the runner module without its error classes.
       if ((error as Error)?.name === 'RunnerClosedError' && !this.stopped && !this.closing.has(chatId) && !chat.closed) {
@@ -110,11 +111,10 @@ export class ChatSessions {
         clearTimeout(chat.flush); chat.flush = undefined;
         const output = chat.output;
         chat.output = { text: '', messages: [] };
-        // Turn accounting assumes Claude Code emits exactly one result per submitted
-        // user turn (as runner's own pendingTurns does); results carry no input
-        // correlation, so overlapping turns are matched by count, in order.
-        chat.pending = Math.max(0, chat.pending - 1);
-        if (!chat.pending) this.stopTimers(chat);
+        // Every result ends Claude's turn, including steered inputs answered together.
+        // Inputs queued after it restart typing when Claude consumes them ('input').
+        chat.active = false;
+        this.stopTimers(chat);
         // Shown text keeps every assistant message already streamed; result.text is the
         // final message, so it is only appended when no assistant event carried it.
         const final = event.result.text;
@@ -139,6 +139,7 @@ export class ChatSessions {
         this.fail(chatId, chat, `Claude exited (${event.signal ?? event.code ?? 'unknown'}). Send another message to resume.`);
         this.retire(chatId, chat);
         break;
+      case 'input': this.activate(chatId, chat); break;
       case 'stderr': console.error(`[bridge] Claude chat ${chatId}: ${event.text}`); break;
       case 'raw': break; // ID is read from the normalized session property, never parsed here.
     }
@@ -147,7 +148,7 @@ export class ChatSessions {
   private retire(chatId: number, chat: ChatSession, terminate = false): void {
     // Detached sessions cannot receive terminal events. Cancel their pending
     // presentation work before removing the listener, including closed-input retry.
-    chat.pending = 0;
+    chat.active = false;
     this.stopTimers(chat);
     this.chats.delete(chatId);
     chat.session.off('event', chat.listener);
@@ -164,19 +165,20 @@ export class ChatSessions {
   }
 
   private fail(chatId: number, chat: ChatSession, message: string): void {
-    const active = chat.pending > 0;
-    chat.pending = 0;
+    const active = chat.active;
+    chat.active = false;
     this.stopTimers(chat);
     chat.output = { text: '', messages: [] };
     if (active) this.queue(chat, async () => { await this.tg.sendMessage(chatId, `⚠️ ${message}`); });
   }
 
-  private startTyping(chatId: number, chat: ChatSession): void {
+  private activate(chatId: number, chat: ChatSession): void {
+    chat.active = true;
     if (chat.typing) return;
     const refresh = () => {
       // Only submitted work owns typing. Late output and detached sessions must
       // not refresh it; an in-flight Telegram action may still expire naturally.
-      if (!chat.pending || chat.closed || chat.termination || this.stopped || this.closing.has(chatId)) {
+      if (!chat.active || chat.closed || chat.termination || this.stopped || this.closing.has(chatId)) {
         this.stopTyping(chat);
         return;
       }
@@ -230,7 +232,7 @@ export class ChatSessions {
       const chats = live ? [...retiring, live] : retiring;
       await Promise.all(chats.map(async chat => {
         chat.closed = true;
-        chat.pending = 0;
+        chat.active = false;
         this.stopTimers(chat);
         chat.session.off('event', chat.listener);
         chat.termination ??= chat.session.close();

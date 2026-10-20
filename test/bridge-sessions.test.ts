@@ -16,6 +16,7 @@ class Session extends EventEmitter {
   state = 'ready'; sessionId?: string;
   send = vi.fn(async (_prompt: string) => {});
   close = vi.fn(async () => {});
+  input() { this.emit('event', { type: 'input', raw: {} }); }
   result(text: string, raw: unknown = {}) { this.emit('event', { type: 'result', result: { ok: true, text, raw }, raw }); }
 }
 const managers: ReturnType<typeof createBridgeSessions>[] = [];
@@ -92,18 +93,20 @@ describe('bridge dispatch', () => {
       expect(vi.getTimerCount()).toBe(0);
     } finally { await f.manager.closeAll(); vi.useRealTimers(); }
   });
-  it('a deferred first turn keeps typing until the overlapping second turn completes', async () => {
+  it('a deferred first turn ends typing; the overlapping second turn restarts it until its result', async () => {
     vi.useFakeTimers(); const f = setup();
     try {
       await f.inbound('A'); await f.inbound('B');
       f.sessions[0].result('', { stop_reason: 'tool_deferred' });
       await f.manager.drain(1);
+      expect(vi.getTimerCount()).toBe(0);
+      f.sessions[0].input();
       await vi.advanceTimersByTimeAsync(4000);
-      expect(f.tg.sendChatAction).toHaveBeenCalledTimes(2);
+      expect(f.tg.sendChatAction).toHaveBeenCalledTimes(3);
       f.sessions[0].result('B reply'); await f.manager.drain(1);
       expect(f.tg.sendMessage).toHaveBeenCalledWith(1, 'B reply');
       await vi.advanceTimersByTimeAsync(8000);
-      expect(f.tg.sendChatAction).toHaveBeenCalledTimes(2);
+      expect(f.tg.sendChatAction).toHaveBeenCalledTimes(3);
       expect(vi.getTimerCount()).toBe(0);
     } finally { await f.manager.closeAll(); vi.useRealTimers(); }
   });
