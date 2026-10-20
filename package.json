@@ -58,7 +58,7 @@
   },
   "dependencies": {
     "@justfortytwo/gate": "^0.1.0",
-    "@justfortytwo/runner": "1.0.0-0",
+    "@justfortytwo/runner": "1.0.0-1",
     "better-sqlite3": "^12.0.0"
   },
   "devDependencies": {
