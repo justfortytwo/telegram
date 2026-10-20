@@ -1,6 +1,6 @@
 {
   "name": "@justfortytwo/telegram",
-  "version": "1.0.0-6",
+  "version": "1.0.0-7",
   "description": "Telegram channel adapter for fortytwo: persistent Claude Code sessions per chat, asynchronous replies, deferred-action notices, and login/pairing authorization.",
   "license": "MIT",
   "author": {
