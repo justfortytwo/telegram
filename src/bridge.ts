@@ -269,7 +269,7 @@ async function respond(tg: Telegram, h: DbHandles, log: ConversationLog, state: 
     await tg.sendMessage(chatId, 'Claude deferred this action. Telegram cannot authorize it. Resolve it through the configured Claude/Gate approval workflow.');
     return true;
   }
-  logBridgeEntry(log, { channel: 'telegram', direction: 'outbound', actor: ASSISTANT_ACTOR, kind: 'message', content: text });
+  logBridgeEntry(log, { channel: 'telegram', direction: 'outbound', actor: ASSISTANT_ACTOR, kind: 'message', content: text, thread_id: String(chatId) });
   return false;
 }
 
@@ -327,7 +327,8 @@ export async function handleInbound(tg: Telegram, auth: AuthContext, state: Brid
     }));
   }
   const journalContent = text || (attachments.length ? `[${attachments.map((a) => a.kind).join(', ')}]` : '');
-  logBridgeEntry(log, { channel: 'telegram', direction: 'inbound', actor: OWNER_ACTOR, kind: 'message', content: journalContent, meta });
+  // The Telegram chat id is the conversation thread for every logged entry.
+  logBridgeEntry(log, { channel: 'telegram', direction: 'inbound', actor: OWNER_ACTOR, kind: 'message', content: journalContent, meta, thread_id: String(chatId) });
 
   if (skipped.length) {
     await tg.sendMessage(chatId, `⚠️ Skipped ${skipped.length} oversized/invalid attachment(s) (limit ${Math.round(ADAPTERS.attachments.maxBytes / 1048576)} MiB).`).catch(() => {});
@@ -335,7 +336,7 @@ export async function handleInbound(tg: Telegram, auth: AuthContext, state: Brid
 
   const localReply = attachments.length === 0 ? telegramCommandReply(text) : undefined;
   if (localReply) {
-    logBridgeEntry(log, { channel: 'telegram', direction: 'outbound', actor: ASSISTANT_ACTOR, kind: 'message', content: localReply });
+    logBridgeEntry(log, { channel: 'telegram', direction: 'outbound', actor: ASSISTANT_ACTOR, kind: 'message', content: localReply, thread_id: String(chatId) });
     console.log(`[bridge] chat ${chatId}: handled local Telegram command "${text}"`);
     await sendReply(tg, chatId, null, localReply);
     return;
@@ -437,7 +438,8 @@ async function main(): Promise<void> {
   const pairingNotice = pairingOnlyStartupNotice(bootstrap.size, store.list('telegram').length);
   if (pairingNotice) console.log(pairingNotice);
 
-  // Persist channel events to the memory store (optional peer; channel-only if absent).
+  // Append channel events to the conversation log (@justfortytwo/transcript over the
+  // memory DB; optional peers, channel-only if either is absent).
   const dbPath = process.env.DB_PATH ? resolve(ROOT, process.env.DB_PATH) : resolve(ROOT, 'db', 'fortytwo.db');
   const { h, embedder } = await loadMemoryEngine(dbPath);
   const log = h && embedder ? await loadConversationLog(h, embedder) : noopConversationLog;

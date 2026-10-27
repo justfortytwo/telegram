@@ -149,6 +149,16 @@ describe('bridge dispatch', () => {
     expect(events[1]).toMatchObject({ direction: 'outbound', actor: 'assistant', content: 'answer' });
     expect(mocks.store).not.toHaveBeenCalled();
   });
+  it('tags inbound, reply and local-command entries with the chat id as threadId', async () => {
+    const f = setup(); f.auth.bootstrap.add(42);
+    const events: ConversationEvent[] = [];
+    const log: ConversationLog = { append: async e => { events.push(e); return 1; } };
+    const manager = createBridgeSessions(f.tg, f.state, null, log); managers.push(manager);
+    await handleInbound(f.tg, f.auth, f.state, null, log, 42, { message_id: 8, chat: { id: 42 }, text: 'hello' }, manager);
+    f.sessions[0].result('answer'); await manager.drain(42);
+    await handleInbound(f.tg, f.auth, f.state, null, log, 42, { message_id: 9, chat: { id: 42 }, text: '/start' }, manager);
+    expect(events.map(e => [e.direction, e.threadId])).toEqual([['inbound', '42'], ['outbound', '42'], ['inbound', '42'], ['outbound', '42']]);
+  });
   it.each([
     ['rejects asynchronously', () => Promise.reject(new Error('disk full'))],
     ['throws synchronously', () => { throw new Error('boom'); }],

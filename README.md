@@ -158,7 +158,8 @@ authorizations or update Gate approval stores.
 | `DB_PATH` | no | Path to the memory DB the bridge opens/migrates at startup (default `db/fortytwo.db`, relative to `FORTYTWO_ROOT`). |
 | `EMBED_MODEL` | no | When set, the bridge uses the Ollama embedder for memory (otherwise a deterministic fallback). |
 | `OLLAMA_BASE_URL` | no | Base URL for the Ollama embedder (default `http://localhost:11434`; may be remote). |
-| `ASSISTANT_NAME` / `ASSISTANT_ACTOR` / `OWNER_ACTOR` | no | Display name + journal actor labels. |
+| `ASSISTANT_NAME` / `ASSISTANT_ACTOR` | no | Display name (default `Assistant`) + conversation-log actor label for replies (default `assistant`). |
+| `OWNER_ACTOR` | no | Conversation-log actor label for inbound messages (default `owner`). **Keep it `owner`:** persona's Oneiros only treats transcript rows with actor exactly `owner` as owner evidence, so any other value means your Telegram messages never refine PROFILE. |
 | `FORTYTWO_ROOT` | no | Working root for the headless `claude` process + state files. |
 
 > `FORD_ROOT` remains a deprecated alias for `FORTYTWO_ROOT`.
