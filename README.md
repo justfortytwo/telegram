@@ -53,9 +53,8 @@ binding, while retaining durable conversation IDs and tolerating inert legacy
 approval-card state. The existing `ALLOWED_CHAT_IDS` bootstrap authorization still applies
 independently of bindings.
 
-The runner dependency is pinned to the published prerelease
-`@justfortytwo/runner@1.0.0-0` (npm dist-tag `next`), the first release with
-persistent sessions. Move to a stable `^1` range once runner publishes one.
+The runner dependency is pinned exactly to the stable `@justfortytwo/runner@1.0.0`,
+which provides persistent sessions.
 
 ### Manual check against a real Claude Code
 
