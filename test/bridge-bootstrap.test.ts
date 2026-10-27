@@ -16,6 +16,7 @@ vi.mock('@justfortytwo/memory', () => ({
   openDb: () => ({ k: {} }), runMigrations: async () => {}, store: vi.fn(async () => 1),
   FakeEmbedder: class {}, enqueue: vi.fn(), existsPending: vi.fn(),
 }));
+import { noopConversationLog } from '../src/conversation-log.js';
 import { createBridgeSessions, handleInbound, pairingOnlyStartupNotice, pollLoop } from '../src/bridge.js';
 import { TelegramAdapter } from '../src/adapter.js';
 import { SqliteBindingStore } from '../src/bindings.js';
@@ -41,8 +42,8 @@ function freshInstall(bootstrap: number[] = [], now?: () => number) {
   // The bridge's own store/adapter, exactly as main() builds them.
   const store = new SqliteBindingStore(dbPath);
   const auth: AuthContext = { adapter: new TelegramAdapter(store, now ? { now } : {}), bootstrap: new Set(bootstrap) };
-  const manager = createBridgeSessions(tg, state, null, null); managers.push(manager);
-  const inbound = (text: string, chatId = 5) => handleInbound(tg, auth, state, null, null, chatId, { message_id: 9, chat: { id: chatId }, text }, manager);
+  const manager = createBridgeSessions(tg, state, null, noopConversationLog); managers.push(manager);
+  const inbound = (text: string, chatId = 5) => handleInbound(tg, auth, state, null, noopConversationLog, chatId, { message_id: 9, chat: { id: chatId }, text }, manager);
   // Separate store + adapter on the same file ~ the installer's `fortytwo pair` process.
   const pair = (opts: { ttlSeconds?: number; now?: () => number } = {}) =>
     new TelegramAdapter(new SqliteBindingStore(dbPath), opts).issueChallenge('owner').code;
@@ -67,7 +68,7 @@ describe('fresh-install bootstrap (no ALLOWED_CHAT_IDS, zero bindings)', () => {
     expect(f.store.list('telegram')).toHaveLength(0);
     f.tg.getUpdates.mockResolvedValueOnce([{ update_id: 1, message: { message_id: 1, chat: { id: 5 }, text: 'hi' } }]);
     f.tg.getUpdates.mockImplementationOnce(async () => { abort.abort(); return []; });
-    await pollLoop(f.tg, f.auth, f.state, null, null, f.manager, abort.signal);
+    await pollLoop(f.tg, f.auth, f.state, null, noopConversationLog, f.manager, abort.signal);
     expect(f.state.lastUpdateId).toBe(1);
     expect(f.runner.createSession).not.toHaveBeenCalled();
     expect(f.tg.sendMessage).not.toHaveBeenCalled();

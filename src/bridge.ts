@@ -25,46 +25,21 @@ import { SqliteBindingStore, type BindingStore } from './bindings.js';
 import { envCompat } from './env.js';
 import { handleAuthCommand, isAuthorized, isAuthCommand, type AuthContext } from './login.js';
 import type { SourceKind } from '@justfortytwo/gate'; // peer — provenance SourceKind
-import type { DbHandles as MemDbHandles, Embedder as MemEmbedder, MemoryInput } from '@justfortytwo/memory';
+import type { DbHandles as MemDbHandles, Embedder as MemEmbedder } from '@justfortytwo/memory';
+import { loadConversationLog, noopConversationLog, toConversationEvent, type ChannelEvent, type ConversationLog } from './conversation-log.js';
 
 // ---------------------------------------------------------------------------
 // PEER PACKAGE SEAMS — stubbed. Replace each block with the real peer import.
 // ---------------------------------------------------------------------------
 
-// @justfortytwo/memory is an OPTIONAL peer. The bridge PERSISTS channel events
-// to the memory store (so they are recallable later); the assistant RECALLS
-// during its headless turn via the Memory MCP tools, not here. memory embeds
-// inline on `store`, so there is no separate reembed job. When memory is absent
-// or fails to open, the bridge runs CHANNEL-ONLY (relays messages but does not
-// persist them) rather than refusing to start.
+// @justfortytwo/memory is an OPTIONAL peer used here only for reply-queue jobs
+// (enqueue / existsPending) and to open the DB handed to the conversation log.
+// Channel events are NOT stored as memories: they are written through the
+// ConversationLog port (see conversation-log.ts). When memory is absent or fails
+// to open, the bridge runs CHANNEL-ONLY (relays messages, records nothing).
 type DbHandles = MemDbHandles | null;
 type Embedder = MemEmbedder | null;
 
-// Channel-event shape the bridge carries; mapped onto memory's generic store input
-// (channel/direction/actor/kind collapse into `source` + structured `meta`).
-interface ChannelEvent {
-  channel: string; direction: string; actor: string; kind: string; content: string;
-  meta?: Record<string, unknown>; thread_id?: string | null; approval_status?: string | null;
-}
-
-/** Map a channel event onto memory's generic MemoryInput (content + provenance). */
-export function mapChannelEventToMemoryInput(entry: ChannelEvent): MemoryInput {
-  const meta: Record<string, unknown> = {
-    ...(entry.meta ?? {}), direction: entry.direction, kind: entry.kind, actor: entry.actor,
-  };
-  if (entry.thread_id != null) meta.thread_id = entry.thread_id;
-  if (entry.approval_status != null) meta.approval_status = entry.approval_status;
-  return {
-    content: entry.content,
-    source: `${entry.channel}:${entry.actor}`,
-    observed: 'stated',
-    tags: [entry.channel, entry.direction, entry.kind],
-    meta,
-  };
-}
-
-// memory.store, captured by loadMemoryEngine when the peer is present.
-let memStore: ((h: MemDbHandles, e: MemEmbedder, m: MemoryInput) => Promise<number>) | null = null;
 // memory job helpers, captured when the peer is present.
 let memEnqueue: ((h: MemDbHandles, j: { kind: string; run_at: string; payload?: unknown }) => number) | null = null;
 let memExistsPending: ((h: MemDbHandles, kind: string, idValue: number) => boolean) | null = null;
@@ -79,7 +54,6 @@ export async function loadMemoryEngine(dbPath: string): Promise<{ h: DbHandles; 
   type MemModule = {
     openDb: (p: string) => MemDbHandles & { k: unknown };
     runMigrations: (k: unknown) => Promise<void>;
-    store: (h: MemDbHandles, e: MemEmbedder, m: MemoryInput) => Promise<number>;
     enqueue: (h: MemDbHandles, j: { kind: string; run_at: string; payload?: unknown }) => number;
     existsPending: (h: MemDbHandles, kind: string, idValue: number) => boolean;
     FakeEmbedder: new () => MemEmbedder;
@@ -100,7 +74,6 @@ export async function loadMemoryEngine(dbPath: string): Promise<{ h: DbHandles; 
     const embedder: MemEmbedder = embedModel
       ? new mod.OllamaEmbedder(embedModel, process.env.OLLAMA_BASE_URL)
       : new mod.FakeEmbedder();
-    memStore = mod.store;
     memEnqueue = mod.enqueue;
     memExistsPending = mod.existsPending;
     console.log(`[bridge] memory wired (db=${dbPath}, embedder=${embedModel ? 'ollama:' + embedModel : 'fake'}).`);
@@ -130,10 +103,6 @@ function makeEnqueueReplyDeps(h: DbHandles): EnqueueReplyDeps | null {
   };
 }
 
-async function store(h: DbHandles, e: Embedder, entry: ChannelEvent): Promise<number> {
-  if (!h || !e || !memStore) return 0; // channel-only mode
-  return memStore(h, e, mapChannelEventToMemoryInput(entry));
-}
 // ---------------------------------------------------------------------------
 
 const ROOT_ENV = envCompat(process.env, 'FORTYTWO_ROOT', 'FORD_ROOT');
@@ -265,21 +234,23 @@ function saveState(s: BridgeState): void {
 
 // --- persistent Claude sessions ---
 
-export function createBridgeSessions(tg: Telegram, state: BridgeState, h: DbHandles, embedder: Embedder): ChatSessions {
+export function createBridgeSessions(tg: Telegram, state: BridgeState, h: DbHandles, log: ConversationLog): ChatSessions {
   const runner = createRunner({ bin: CLAUDE_BIN, cwd: ROOT, env: { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' } });
   return new ChatSessions(runner, tg, {
     ids: state.sessions,
     persist: () => saveState(state),
-    onResult: (chatId, result, text) => respond(tg, h, embedder, state, chatId, result, text),
+    onResult: (chatId, result, text) => respond(tg, h, log, state, chatId, result, text),
   });
 }
 
 // --- I/O glue ---
 
-async function logBridgeEntry(h: DbHandles, embedder: Embedder, entry: ChannelEvent): Promise<number> {
-  // memory's store() inline-enqueues a reembed_memory job when needed; no
-  // separate addJob call required here (that stub has been removed).
-  return store(h, embedder, entry);
+async function logBridgeEntry(log: ConversationLog, entry: ChannelEvent): Promise<void> {
+  try {
+    await log.append(toConversationEvent(entry));
+  } catch (e: unknown) {
+    console.error(`[bridge] conversation log append failed: ${(e as Error)?.message ?? e}`);
+  }
 }
 
 async function sendReply(tg: Telegram, chatId: number, placeholderId: number | null, text: string): Promise<void> {
@@ -289,17 +260,17 @@ async function sendReply(tg: Telegram, chatId: number, placeholderId: number | n
   await tg.sendMessage(chatId, text || '(no reply)');
 }
 
-async function respond(tg: Telegram, h: DbHandles, embedder: Embedder, state: BridgeState, chatId: number, result: RunResult, text: string): Promise<boolean> {
+async function respond(tg: Telegram, h: DbHandles, log: ConversationLog, state: BridgeState, chatId: number, result: RunResult, text: string): Promise<boolean> {
   // A deferral is terminal even when Claude supplies no deferred-tool details.
   if ((result.raw as { stop_reason?: string } | null)?.stop_reason === 'tool_deferred') {
     await tg.sendMessage(chatId, 'Claude deferred this action. Telegram cannot authorize it. Resolve it through the configured Claude/Gate approval workflow.');
     return true;
   }
-  await logBridgeEntry(h, embedder, { channel: 'telegram', direction: 'outbound', actor: ASSISTANT_ACTOR, kind: 'message', content: text });
+  await logBridgeEntry(log, { channel: 'telegram', direction: 'outbound', actor: ASSISTANT_ACTOR, kind: 'message', content: text });
   return false;
 }
 
-export async function handleInbound(tg: Telegram, auth: AuthContext, state: BridgeState, h: DbHandles, embedder: Embedder, chatId: number, message: TgMessage, sessions: ChatSessions): Promise<void> {
+export async function handleInbound(tg: Telegram, auth: AuthContext, state: BridgeState, h: DbHandles, log: ConversationLog, chatId: number, message: TgMessage, sessions: ChatSessions): Promise<void> {
   const text = message.text ?? message.caption ?? '';
 
   // --- AUTH GATE (lockdown) -------------------------------------------------
@@ -353,7 +324,7 @@ export async function handleInbound(tg: Telegram, auth: AuthContext, state: Brid
     }));
   }
   const journalContent = text || (attachments.length ? `[${attachments.map((a) => a.kind).join(', ')}]` : '');
-  await logBridgeEntry(h, embedder, { channel: 'telegram', direction: 'inbound', actor: OWNER_ACTOR, kind: 'message', content: journalContent, meta });
+  await logBridgeEntry(log, { channel: 'telegram', direction: 'inbound', actor: OWNER_ACTOR, kind: 'message', content: journalContent, meta });
 
   if (skipped.length) {
     await tg.sendMessage(chatId, `⚠️ Skipped ${skipped.length} oversized/invalid attachment(s) (limit ${Math.round(ADAPTERS.attachments.maxBytes / 1048576)} MiB).`).catch(() => {});
@@ -361,7 +332,7 @@ export async function handleInbound(tg: Telegram, auth: AuthContext, state: Brid
 
   const localReply = attachments.length === 0 ? telegramCommandReply(text) : undefined;
   if (localReply) {
-    await logBridgeEntry(h, embedder, { channel: 'telegram', direction: 'outbound', actor: ASSISTANT_ACTOR, kind: 'message', content: localReply });
+    await logBridgeEntry(log, { channel: 'telegram', direction: 'outbound', actor: ASSISTANT_ACTOR, kind: 'message', content: localReply });
     console.log(`[bridge] chat ${chatId}: handled local Telegram command "${text}"`);
     await sendReply(tg, chatId, null, localReply);
     return;
@@ -373,11 +344,11 @@ export async function handleInbound(tg: Telegram, auth: AuthContext, state: Brid
 }
 
 /** Old approval buttons remain in Telegram history. Never resume or authorize work. */
-export async function handleCallback(tg: Telegram, _state: BridgeState, _h: DbHandles, _embedder: Embedder, _chatId: number, cbId: string, _data: string, _cardMessageId: number, _sessions: ChatSessions): Promise<void> {
+export async function handleCallback(tg: Telegram, _state: BridgeState, _h: DbHandles, _log: ConversationLog, _chatId: number, cbId: string, _data: string, _cardMessageId: number, _sessions: ChatSessions): Promise<void> {
   await tg.answerCallbackQuery(cbId, 'This approval control is no longer supported. No authorization was recorded.').catch(() => {});
 }
 
-export async function pollLoop(tg: Telegram, auth: AuthContext, state: BridgeState, h: DbHandles, embedder: Embedder, sessions: ChatSessions, signal: AbortSignal): Promise<void> {
+export async function pollLoop(tg: Telegram, auth: AuthContext, state: BridgeState, h: DbHandles, log: ConversationLog, sessions: ChatSessions, signal: AbortSignal): Promise<void> {
   // Pre-build dedup deps once; null when memory is unavailable (channel-only).
   const replyDeps = makeEnqueueReplyDeps(h);
 
@@ -400,10 +371,10 @@ export async function pollLoop(tg: Telegram, auth: AuthContext, state: BridgeSta
       // Legacy callbacks still require Telegram chat authorization.
       try {
         if (u.message && hasHandleableContent(u.message)) {
-          await handleInbound(tg, auth, state, h, embedder, chatId, u.message, sessions);
+          await handleInbound(tg, auth, state, h, log, chatId, u.message, sessions);
         } else if (u.callback_query?.data && u.callback_query.message) {
           if (!isAuthorized(auth, chatId)) { console.log(`[bridge] chat ${chatId}: callback dropped (unbound, lockdown)`); continue; }
-          await handleCallback(tg, state, h, embedder, chatId, u.callback_query.id, u.callback_query.data, u.callback_query.message.message_id, sessions);
+          await handleCallback(tg, state, h, log, chatId, u.callback_query.id, u.callback_query.data, u.callback_query.message.message_id, sessions);
         }
       } catch (e: any) {
         if (signal.aborted) break;
@@ -466,18 +437,19 @@ async function main(): Promise<void> {
   // Persist channel events to the memory store (optional peer; channel-only if absent).
   const dbPath = process.env.DB_PATH ? resolve(ROOT, process.env.DB_PATH) : resolve(ROOT, 'db', 'fortytwo.db');
   const { h, embedder } = await loadMemoryEngine(dbPath);
+  const log = h && embedder ? await loadConversationLog(h, embedder) : noopConversationLog;
 
   const tg = new Telegram(token, bootstrap);
   const state = loadState();
 
   console.log(`[bridge] up. bootstrap=${bootstrap.size}, bindings=${store.list('telegram').length}, bindingsDb=${BINDINGS_DB_PATH}`);
   // Proactive wakes are now handled by @justfortytwo/scheduler (external daemon).
-  const sessions = createBridgeSessions(tg, state, h, embedder);
+  const sessions = createBridgeSessions(tg, state, h, log);
   const controller = new AbortController();
   const shutdown = () => { controller.abort(); void sessions.closeAll(); };
   process.once('SIGINT', shutdown);
   process.once('SIGTERM', shutdown);
-  try { await pollLoop(tg, auth, state, h, embedder, sessions, controller.signal); }
+  try { await pollLoop(tg, auth, state, h, log, sessions, controller.signal); }
   finally {
     controller.abort();
     await sessions.closeAll();

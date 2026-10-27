@@ -22,7 +22,7 @@ uses this package's `telegramNotifier` export.
 src/
   index.ts           Public API (barrel). New public exports go here.
   bridge.ts          Bin entry (`fortytwo-telegram-bridge`) + turn loop, approval callbacks,
-                     memory persistence, peer-package seams. Exported pure helpers are tested.
+                     conversation-log writes, peer-package seams. Exported pure helpers are tested.
   chat-sessions.ts   ChatSessions: per-chat RunnerSession lifecycle, typing, output flushing.
   telegram.ts        Thin Telegram Bot API client, message types, HTML formatting, keyboards.
   adapter.ts         Channel-agnostic ChannelAdapter contract + TelegramAdapter (challenge/verify).
@@ -31,6 +31,7 @@ src/
   attachments.ts     Inbound photo/document handling (kind, extension, inbox path, size limit).
   adapters-config.ts Loads config/adapters.toml with a fallback TOML parser.
   notify.ts          Scheduler Notifier adapter (structural, no scheduler import) + enqueueReply.
+  conversation-log.ts ConversationLog port, toConversationEvent, loadConversationLog (transcript peer).
   env.ts             envCompat(): FORTYTWO_* vars with deprecated FORD_* aliases.
 test/                Vitest suites, `<module>.test.ts` (bridge-*.test.ts cover bridge.ts).
 dist/                tsc output (gitignored, published).
@@ -68,8 +69,15 @@ reusable workflow `justfortytwo/.github/.github/workflows/node-ci.yml@main` with
 
 - **Memory is optional; gate is a dependency.** `@justfortytwo/memory` is an optional
   `peerDependency` (plus a devDependency for types/tests). The bridge loads it dynamically
-  (`loadMemoryEngine`); if it is absent or fails to open, it runs **channel-only** (relays,
-  does not persist). Only types are imported statically from memory. `@justfortytwo/gate`
+  (`loadMemoryEngine`) for the reply queue (`enqueue` / `existsPending`) and to open the DB; if
+  it is absent or fails to open, it runs **channel-only** (relays, records nothing). Only
+  types are imported statically from memory.
+- **Conversation log, not memory.** Every inbound/outbound event is written through the
+  structural `ConversationLog` port (`src/conversation-log.ts`). `loadConversationLog`
+  dynamically imports the optional peer `@justfortytwo/transcript` (`prepareTranscript`,
+  `createTranscript`) and falls back to a no-op. No transcript or memory types are imported
+  for this. A failing `append` is logged to stderr and never blocks a reply. Chat is no
+  longer stored as memories. `@justfortytwo/gate`
   is a regular dependency because `attachments.ts` imports `createSourceEnvelope` at runtime.
 - **`// TODO(wire):` markers** mark seams still stubbed locally: the gate's exact-command
   bash allowlist (`appendExactBashAllowlistEntry`, `bashAllowlistPath`), recording the

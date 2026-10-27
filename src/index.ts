@@ -6,6 +6,7 @@
 //
 // fortytwo packages (referenced, NOT bundled):
 //   - @justfortytwo/memory  optional peer (MEMORY_TOOL_CONTRACT_VERSION, tools mcp__fortytwo-memory__*)
+//   - @justfortytwo/transcript  optional peer (conversation log, loaded dynamically)
 //   - @justfortytwo/gate    dependency: provenance envelopes (POLICY_SCHEMA_VERSION)
 
 // --- Channel transport (owned) ---
@@ -81,8 +82,16 @@ export {
   telegramCommandReply,
   buildInboundPrompt,
   ingestMessageAttachments,
-  mapChannelEventToMemoryInput,
   type DeferredTool,
   type Interpreted,
   type AttachmentIo,
 } from './bridge.js';
+
+// --- Conversation log port (owned; implementation is the optional transcript peer) ---
+export {
+  toConversationEvent,
+  loadConversationLog,
+  noopConversationLog,
+  type ConversationEvent,
+  type ConversationLog,
+} from './conversation-log.js';

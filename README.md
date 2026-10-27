@@ -129,19 +129,22 @@ dynamically, and it is also a devDependency so types and tests resolve.
 | Package | Used for | Contract |
 | --- | --- | --- |
 | `@justfortytwo/memory` | Memory store, jobs, embeddings | `MEMORY_TOOL_CONTRACT_VERSION` (tools `mcp__fortytwo-memory__*`) |
+| `@justfortytwo/transcript` | Conversation log (every inbound/outbound message) | `prepareTranscript`, `createTranscript` |
 | `@justfortytwo/gate` | Provenance envelopes (policy hook configured separately) | `POLICY_SCHEMA_VERSION` |
 
 Install memory alongside this package to enable persistence:
 
 ```sh
-npm install @justfortytwo/telegram @justfortytwo/memory
+npm install @justfortytwo/telegram @justfortytwo/memory @justfortytwo/transcript
 ```
 
 The **memory** data path is wired: the bridge opens + migrates the memory DB at
-startup and **persists each channel event** to `@justfortytwo/memory`; recall
-happens inside the headless `claude` turn via the Memory MCP tools. If the memory
-peer is absent, the bridge degrades to **channel-only** (messages relay but are
-not persisted) rather than refusing to start. Telegram does not record tool
+startup (used for the reply queue) and **writes each channel event** through
+`@justfortytwo/transcript`'s conversation log; chat is no longer stored as memories.
+Recall happens inside the headless `claude` turn via the Memory MCP tools. If the
+memory or transcript peer is absent, the bridge degrades to **channel-only**
+(messages relay but are not recorded) rather than refusing to start. A failing
+log write is logged to stderr and never blocks a reply. Telegram does not record tool
 authorizations or update Gate approval stores.
 
 ## Environment

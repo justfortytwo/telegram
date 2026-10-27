@@ -49,10 +49,14 @@
     "login"
   ],
   "peerDependencies": {
-    "@justfortytwo/memory": "^0.1.5 || ^1.0.0-0"
+    "@justfortytwo/memory": "^0.1.5 || ^1.0.0-0",
+    "@justfortytwo/transcript": "^1.0.0-0"
   },
   "peerDependenciesMeta": {
     "@justfortytwo/memory": {
+      "optional": true
+    },
+    "@justfortytwo/transcript": {
       "optional": true
     }
   },
