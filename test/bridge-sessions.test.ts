@@ -149,16 +149,32 @@ describe('bridge dispatch', () => {
     expect(events[1]).toMatchObject({ direction: 'outbound', actor: 'assistant', content: 'answer' });
     expect(mocks.store).not.toHaveBeenCalled();
   });
-  it('a failing conversation log never blocks the reply', async () => {
+  it.each([
+    ['rejects asynchronously', () => Promise.reject(new Error('disk full'))],
+    ['throws synchronously', () => { throw new Error('boom'); }],
+  ])('a conversation log that %s is logged and never blocks the reply', async (_n, append) => {
     const f = setup();
     const err = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const log: ConversationLog = { append: async () => { throw new Error('disk full'); } };
+    const log: ConversationLog = { append: append as any };
     const manager = createBridgeSessions(f.tg, f.state, null, log); managers.push(manager);
     await handleInbound(f.tg, f.auth, f.state, null, log, 1, { message_id: 8, chat: { id: 1 }, text: 'hello' }, manager);
     expect(f.sessions[0].send).toHaveBeenCalledWith('hello');
     f.sessions[0].result('answer'); await manager.drain(1);
-    expect(err).toHaveBeenCalled();
+    await new Promise(r => setTimeout(r, 0));
+    expect(f.tg.sendMessage).toHaveBeenCalled();
+    expect(err).toHaveBeenCalledWith(expect.stringContaining('conversation log append failed'));
     err.mockRestore();
+  });
+  it('a never-resolving log neither delays the prompt nor the reply, and appends in call order', async () => {
+    const f = setup();
+    const events: ConversationEvent[] = [];
+    const log: ConversationLog = { append: e => { events.push(e); return new Promise(() => {}); } };
+    const manager = createBridgeSessions(f.tg, f.state, null, log); managers.push(manager);
+    await handleInbound(f.tg, f.auth, f.state, null, log, 1, { message_id: 8, chat: { id: 1 }, text: 'hello' }, manager);
+    expect(f.sessions[0].send).toHaveBeenCalledWith('hello');
+    f.sessions[0].result('answer'); await manager.drain(1);
+    expect(f.tg.sendMessage).toHaveBeenCalled();
+    expect(events.map(e => e.direction)).toEqual(['inbound', 'outbound']);
   });
 });
 

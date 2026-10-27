@@ -245,11 +245,14 @@ export function createBridgeSessions(tg: Telegram, state: BridgeState, h: DbHand
 
 // --- I/O glue ---
 
-async function logBridgeEntry(log: ConversationLog, entry: ChannelEvent): Promise<void> {
+// Fire-and-forget: a slow or hung log (e.g. Ollama embedding) must never delay a
+// reply or stall the poll loop. Call order is preserved (append inserts synchronously).
+function logBridgeEntry(log: ConversationLog, entry: ChannelEvent): void {
+  const report = (e: unknown) => console.error(`[bridge] conversation log append failed: ${(e as Error)?.message ?? e}`);
   try {
-    await log.append(toConversationEvent(entry));
+    Promise.resolve(log.append(toConversationEvent(entry))).catch(report);
   } catch (e: unknown) {
-    console.error(`[bridge] conversation log append failed: ${(e as Error)?.message ?? e}`);
+    report(e);
   }
 }
 
@@ -266,7 +269,7 @@ async function respond(tg: Telegram, h: DbHandles, log: ConversationLog, state: 
     await tg.sendMessage(chatId, 'Claude deferred this action. Telegram cannot authorize it. Resolve it through the configured Claude/Gate approval workflow.');
     return true;
   }
-  await logBridgeEntry(log, { channel: 'telegram', direction: 'outbound', actor: ASSISTANT_ACTOR, kind: 'message', content: text });
+  logBridgeEntry(log, { channel: 'telegram', direction: 'outbound', actor: ASSISTANT_ACTOR, kind: 'message', content: text });
   return false;
 }
 
@@ -324,7 +327,7 @@ export async function handleInbound(tg: Telegram, auth: AuthContext, state: Brid
     }));
   }
   const journalContent = text || (attachments.length ? `[${attachments.map((a) => a.kind).join(', ')}]` : '');
-  await logBridgeEntry(log, { channel: 'telegram', direction: 'inbound', actor: OWNER_ACTOR, kind: 'message', content: journalContent, meta });
+  logBridgeEntry(log, { channel: 'telegram', direction: 'inbound', actor: OWNER_ACTOR, kind: 'message', content: journalContent, meta });
 
   if (skipped.length) {
     await tg.sendMessage(chatId, `⚠️ Skipped ${skipped.length} oversized/invalid attachment(s) (limit ${Math.round(ADAPTERS.attachments.maxBytes / 1048576)} MiB).`).catch(() => {});
@@ -332,7 +335,7 @@ export async function handleInbound(tg: Telegram, auth: AuthContext, state: Brid
 
   const localReply = attachments.length === 0 ? telegramCommandReply(text) : undefined;
   if (localReply) {
-    await logBridgeEntry(log, { channel: 'telegram', direction: 'outbound', actor: ASSISTANT_ACTOR, kind: 'message', content: localReply });
+    logBridgeEntry(log, { channel: 'telegram', direction: 'outbound', actor: ASSISTANT_ACTOR, kind: 'message', content: localReply });
     console.log(`[bridge] chat ${chatId}: handled local Telegram command "${text}"`);
     await sendReply(tg, chatId, null, localReply);
     return;
