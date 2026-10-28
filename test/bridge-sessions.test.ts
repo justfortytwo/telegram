@@ -7,7 +7,7 @@ vi.mock('@justfortytwo/memory', () => ({
   openDb: () => ({ k: {} }), runMigrations: async () => {}, store: mocks.store,
   FakeEmbedder: class {}, enqueue: vi.fn(), existsPending: vi.fn(),
 }));
-import { createBridgeSessions, handleInbound, handleCallback, pollLoop, ingestMessageAttachments } from '../src/bridge.js';
+import { createBridgeSessions, handleInbound, handleCallback, pollLoop, ingestMessageAttachments, hasHandleableContent } from '../src/bridge.js';
 import { noopConversationLog, type ConversationEvent, type ConversationLog } from '../src/conversation-log.js';
 import { TelegramAdapter } from '../src/adapter.js';
 import { MemoryBindingStore } from '../src/bindings.js';
@@ -239,6 +239,28 @@ describe('attachment regression', () => {
     const oversized = await ingestMessageAttachments(io, message, { maxBytes: 4, storeDir: 'inbox', channel: 'telegram' });
     expect(oversized.skipped).toHaveLength(1);
     expect(io.download).toHaveBeenCalledTimes(1);
+  });
+
+  it('treats voice notes and audio files as handleable inbound content', () => {
+    const base = { message_id: 5, chat: { id: 1 } };
+    expect(hasHandleableContent({ ...base, voice: { file_id: 'v1' } } as TgMessage)).toBe(true);
+    expect(hasHandleableContent({ ...base, audio: { file_id: 'a1' } } as TgMessage)).toBe(true);
+    expect(hasHandleableContent({ ...base } as TgMessage)).toBe(false);
+  });
+
+  it('ingests a voice note as an audio attachment with telegram_voice provenance', async () => {
+    const f = setup();
+    f.tg.getFilePath = vi.fn(async (id: string) => id);
+    f.tg.downloadFile = vi.fn(async () => Buffer.from('ogg bytes'));
+    const events: ConversationEvent[] = [];
+    const log: ConversationLog = { append: async e => { events.push(e); return 1; } };
+    await handleInbound(f.tg, f.auth, f.state, null, log, 1, { message_id: 4, chat: { id: 1 }, voice: { file_id: 'AAAAAAAA12345678', mime_type: 'audio/ogg', file_size: 9 } }, f.manager);
+    expect(f.sessions[0].send.mock.calls[0][0]).toContain('inbox/1/4.ogg');
+    expect(events).toHaveLength(1);
+    const stored = events[0] as ConversationEvent & { meta: any };
+    expect(stored).toMatchObject({ content: '[audio]', direction: 'inbound', kind: 'message' });
+    expect(stored.meta.attachments[0]).toMatchObject({ storage_ref: 'inbox/1/4.ogg', kind: 'audio', mime: 'audio/ogg', byte_size: 9, source_envelope: { source_kind: 'telegram_voice' } });
+    expect(mocks.write).toHaveBeenCalledWith(expect.stringContaining('/inbox/1/4.ogg'), Buffer.from('ogg bytes'));
   });
 });
 

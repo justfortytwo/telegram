@@ -49,13 +49,15 @@ export function formatTelegramHtml(text: string): string {
 
 export interface PhotoSize { file_id: string; file_unique_id: string; width: number; height: number; file_size?: number; }
 export interface TgDocument { file_id: string; file_name?: string; mime_type?: string; file_size?: number; }
+export interface TgVoice { file_id: string; duration?: number; mime_type?: string; file_size?: number; }
+export interface TgAudio { file_id: string; file_name?: string; mime_type?: string; file_size?: number; duration?: number; }
 
 export interface AttachmentSpec {
   file_id: string;
   mime: string;
   file_name?: string;
   file_size?: number;
-  source_kind: 'telegram_photo' | 'telegram_document';
+  source_kind: 'telegram_photo' | 'telegram_document' | 'telegram_voice' | 'telegram_audio';
 }
 
 export interface TgMessage {
@@ -66,6 +68,8 @@ export interface TgMessage {
   caption?: string;
   photo?: PhotoSize[];
   document?: TgDocument;
+  voice?: TgVoice;
+  audio?: TgAudio;
   forward_origin?: unknown;
   forward_from?: unknown;
   forward_from_chat?: unknown;
@@ -96,6 +100,24 @@ export function messageAttachmentSpecs(message: TgMessage): AttachmentSpec[] {
       file_name: message.document.file_name,
       file_size: message.document.file_size,
       source_kind: 'telegram_document',
+    });
+  }
+  if (message.voice) {
+    specs.push({
+      file_id: message.voice.file_id,
+      mime: message.voice.mime_type ?? 'audio/ogg',
+      file_name: `voice-${message.voice.file_id.slice(-8)}.ogg`,
+      file_size: message.voice.file_size,
+      source_kind: 'telegram_voice',
+    });
+  }
+  if (message.audio) {
+    specs.push({
+      file_id: message.audio.file_id,
+      mime: message.audio.mime_type ?? 'audio/mpeg',
+      file_name: message.audio.file_name ?? `audio-${message.audio.file_id.slice(-8)}.mp3`,
+      file_size: message.audio.file_size,
+      source_kind: 'telegram_audio',
     });
   }
   return specs;
