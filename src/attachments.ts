@@ -22,6 +22,7 @@ export interface Attachment {
 const EXT_BY_MIME: Record<string, string> = {
   'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp',
   'application/pdf': 'pdf', 'text/plain': 'txt',
+  'audio/ogg': 'ogg', 'audio/mpeg': 'mp3', 'audio/mp4': 'm4a', 'audio/x-m4a': 'm4a', 'audio/wav': 'wav',
 };
 
 export function kindFromMime(mime: string): AttachmentKind {

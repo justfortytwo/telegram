@@ -262,6 +262,14 @@ describe('attachment regression', () => {
     expect(stored.meta.attachments[0]).toMatchObject({ storage_ref: 'inbox/1/4.ogg', kind: 'audio', mime: 'audio/ogg', byte_size: 9, source_envelope: { source_kind: 'telegram_voice' } });
     expect(mocks.write).toHaveBeenCalledWith(expect.stringContaining('/inbox/1/4.ogg'), Buffer.from('ogg bytes'));
   });
+
+  it('derives the stored audio extension from the real mime type', async () => {
+    const io = { download: vi.fn(async () => Buffer.from('m4a bytes')), write: vi.fn() };
+    const message = { message_id: 6, chat: { id: 1 }, audio: { file_id: 'aud', mime_type: 'audio/mp4' } };
+    const result = await ingestMessageAttachments(io, message, { maxBytes: 100, storeDir: 'inbox', channel: 'telegram' });
+    expect(result.attachments[0]).toMatchObject({ storage_ref: 'inbox/1/6.m4a', mime: 'audio/mp4', kind: 'audio', source_envelope: { source_kind: 'telegram_audio' } });
+    expect(io.write).toHaveBeenCalledWith('inbox/1/6.m4a', Buffer.from('m4a bytes'));
+  });
 });
 
 describe('poll cancellation', () => {

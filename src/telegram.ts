@@ -106,7 +106,6 @@ export function messageAttachmentSpecs(message: TgMessage): AttachmentSpec[] {
     specs.push({
       file_id: message.voice.file_id,
       mime: message.voice.mime_type ?? 'audio/ogg',
-      file_name: `voice-${message.voice.file_id.slice(-8)}.ogg`,
       file_size: message.voice.file_size,
       source_kind: 'telegram_voice',
     });
@@ -115,7 +114,7 @@ export function messageAttachmentSpecs(message: TgMessage): AttachmentSpec[] {
     specs.push({
       file_id: message.audio.file_id,
       mime: message.audio.mime_type ?? 'audio/mpeg',
-      file_name: message.audio.file_name ?? `audio-${message.audio.file_id.slice(-8)}.mp3`,
+      file_name: message.audio.file_name,
       file_size: message.audio.file_size,
       source_kind: 'telegram_audio',
     });
