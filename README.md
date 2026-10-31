@@ -117,6 +117,21 @@ sqlite db exists:
 > table, swap the default store for a memory-backed `BindingStore`. The login
 > flow is unaffected.
 
+## Attachments
+
+Inbound messages can carry attachments: **photos** (`telegram_photo`),
+**documents** (`telegram_document`), **voice notes** (`telegram_voice`) and
+**audio files** (`telegram_audio`). Each is downloaded within the byte limit,
+stored under the inbox store dir as `<chat>/<message>` with the extension
+derived from the real mime type (`audio/ogg`, `audio/mpeg`, `audio/mp4`,
+`audio/x-m4a`, `audio/wav`, …), and handed to the session as an untrusted-content
+attachment with a gate provenance envelope. Telegram never sends a file name for
+voice notes, and none is invented: when the update carries no `file_name`, the
+stored name comes from the message and file ids, as with the other attachment
+kinds. Files over the download limit are skipped and reported. Video and video
+notes are not ingested yet, and nothing transcribes audio — the agent receives
+the stored file path only.
+
 ## fortytwo package dependencies
 
 `@justfortytwo/gate` is a regular dependency: `attachments.ts` imports its

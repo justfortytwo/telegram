@@ -137,7 +137,7 @@ export function telegramSourceKind(message: TgMessage): SourceKind {
 }
 
 export function hasHandleableContent(message: TgMessage): boolean {
-  return message.text !== undefined || Boolean(message.photo && message.photo.length) || Boolean(message.document);
+  return message.text !== undefined || Boolean(message.photo && message.photo.length) || Boolean(message.document) || Boolean(message.voice) || Boolean(message.audio);
 }
 
 export function telegramCommandReply(text: string): string | undefined {
