@@ -38,6 +38,13 @@ beforeEach(() => vi.clearAllMocks());
 afterEach(async () => { await Promise.all(managers.splice(0).map(m => m.closeAll())); });
 
 describe('bridge dispatch', () => {
+  it('passes operator Claude arguments to the runner, and none by default', () => {
+    setup();
+    expect(mocks.createRunner.mock.calls[0][0].args).toEqual([]);
+    const tg: any = {}; const state = { sessions: {}, lastUpdateId: 0 };
+    managers.push(createBridgeSessions(tg, state, null, noopConversationLog, ['--chrome']));
+    expect(mocks.createRunner.mock.calls[1][0].args).toEqual(['--chrome']);
+  });
   it('polls and dispatches B before result A, including across getUpdates calls', async () => {
     const f = setup(); const abort = new AbortController();
     f.tg.getUpdates.mockResolvedValueOnce([{ update_id: 1, message: { message_id: 1, chat: { id: 1 }, text: 'A' } }]);
@@ -133,7 +140,7 @@ describe('bridge dispatch', () => {
     const before = process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY;
     process.env.FORTYTWO_TURN_TIMEOUT = '1'; process.env.FORD_TURN_TIMEOUT = '2';
     setup();
-    expect(mocks.createRunner).toHaveBeenCalledWith({ bin: expect.any(String), cwd: expect.any(String), env: { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' } });
+    expect(mocks.createRunner).toHaveBeenCalledWith({ bin: expect.any(String), cwd: expect.any(String), env: { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' }, args: [] });
     expect(process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY).toBe(before);
     delete process.env.FORTYTWO_TURN_TIMEOUT; delete process.env.FORD_TURN_TIMEOUT;
   });

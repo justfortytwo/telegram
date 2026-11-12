@@ -168,6 +168,7 @@ authorizations or update Gate approval stores.
 | `TELEGRAM_BOT_TOKEN` | yes | Bot token. The bridge is the **only** long-poller on this bot. |
 | `ALLOWED_CHAT_IDS` | no | Comma-separated chat IDs authorized without a binding. Not needed for first pairing: `/login <code>` works with zero bindings. |
 | `CLAUDE_BIN` | no | Path to the `claude` binary (default `claude`). |
+| `FORTYTWO_CLAUDE_ARGS` | no | Extra arguments for every `claude` run, as a JSON array of strings (e.g. `["--chrome"]`). Set by `fortytwo start -- <args>`. A malformed value stops the bridge at boot. |
 | `TELEGRAM_BINDINGS_DB` | no | Path to the self-owned bindings db (default `state/telegram-bindings.db`). |
 | `DB_PATH` | no | Path to the memory DB the bridge opens/migrates at startup (default `db/fortytwo.db`, relative to `FORTYTWO_ROOT`). |
 | `EMBED_MODEL` | no | When set, the bridge uses the Ollama embedder for memory (otherwise a deterministic fallback). |

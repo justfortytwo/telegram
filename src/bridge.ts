@@ -13,7 +13,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, realpathSync } from
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { createRunner, type RunResult } from '@justfortytwo/runner';
+import { claudeArgsFromEnv, createRunner, type RunResult } from '@justfortytwo/runner';
 import { ChatSessions } from './chat-sessions.js';
 import { enqueueReply, type EnqueueReplyDeps } from './notify.js';
 
@@ -234,8 +234,9 @@ function saveState(s: BridgeState): void {
 
 // --- persistent Claude sessions ---
 
-export function createBridgeSessions(tg: Telegram, state: BridgeState, h: DbHandles, log: ConversationLog): ChatSessions {
-  const runner = createRunner({ bin: CLAUDE_BIN, cwd: ROOT, env: { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' } });
+/** `claudeArgs`: extra Claude arguments the operator set for this install (FORTYTWO_CLAUDE_ARGS). */
+export function createBridgeSessions(tg: Telegram, state: BridgeState, h: DbHandles, log: ConversationLog, claudeArgs: readonly string[] = []): ChatSessions {
+  const runner = createRunner({ bin: CLAUDE_BIN, cwd: ROOT, env: { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' }, args: [...claudeArgs] });
   return new ChatSessions(runner, tg, {
     ids: state.sessions,
     persist: () => saveState(state),
@@ -423,6 +424,9 @@ async function main(): Promise<void> {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   const bootstrap = parseAllowed(process.env.ALLOWED_CHAT_IDS);
   if (!token) { console.error('[bridge] TELEGRAM_BOT_TOKEN not set — refusing to start.'); process.exit(1); }
+  // Read before anything is opened: a malformed FORTYTWO_CLAUDE_ARGS stops the bridge at boot,
+  // not on the first message.
+  const claudeArgs = claudeArgsFromEnv();
   // NOTE: unlike the monolith, ALLOWED_CHAT_IDS is now an OPTIONAL bootstrap set,
   // not the sole authorization. The bot is still locked down: unbound senders get
   // no response and can only earn access via /login <code>. Starting with an empty
@@ -449,7 +453,7 @@ async function main(): Promise<void> {
 
   console.log(`[bridge] up. bootstrap=${bootstrap.size}, bindings=${store.list('telegram').length}, bindingsDb=${BINDINGS_DB_PATH}`);
   // Proactive wakes are now handled by @justfortytwo/scheduler (external daemon).
-  const sessions = createBridgeSessions(tg, state, h, log);
+  const sessions = createBridgeSessions(tg, state, h, log, claudeArgs);
   const controller = new AbortController();
   const shutdown = () => { controller.abort(); void sessions.closeAll(); };
   process.once('SIGINT', shutdown);
