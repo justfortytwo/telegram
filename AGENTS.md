@@ -8,8 +8,10 @@ The Telegram channel adapter for fortytwo. It is an always-on **bridge** process
 
 1. Long-polls Telegram, authorizes each inbound message, and drives a persistent headless
    `claude` session per chat (via `@justfortytwo/runner`), sending the reply back.
-2. Surfaces safety-gate deferrals (`stop_reason: tool_deferred`) as inline-keyboard approval
-   cards (Approve / Deny / "Allow _N_h" for exact Bash commands), then resumes the turn.
+2. Reports safety-gate deferrals (`stop_reason: tool_deferred`) with a plain notice. Only
+   with `TELEGRAM_APPROVALS` set does it show an Approve / Deny card, record the decision
+   in the gate's approval store (`approvalsPath`) and resume the session with no input
+   (`ChatSessions.resume`). The gate hook, never the bridge, decides whether the call runs.
 3. Locks the bot down behind a challenge/verify **pairing** flow (`/login <code>`, `/logout`).
    Unbound senders get no response at all.
 

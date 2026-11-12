@@ -14,6 +14,8 @@ Code sessions through `@justfortytwo/runner`.
    4000 UTF-16 units. Typing refreshes while submitted inputs await results.
    Deferred results produce a plain notice: Telegram cannot authorize the action.
    Claude Code owns tool permissions; Gate is optional policy through Claude hooks/plugins.
+   With `TELEGRAM_APPROVALS` set, a deferral staged by the gate becomes an
+   Approve/Deny card instead (see [Approvals from Telegram](#approvals-from-telegram-opt-in)).
 3. **Scheduler separation.** Proactive wakes remain the responsibility of the
    external `@justfortytwo/scheduler` daemon.
 
@@ -158,8 +160,35 @@ startup (used for the reply queue) and **writes each channel event** through
 Recall happens inside the headless `claude` turn via the Memory MCP tools. If the
 memory or transcript peer is absent, the bridge degrades to **channel-only**
 (messages relay but are not recorded) rather than refusing to start. A failing
-log write is logged to stderr and never blocks a reply. Telegram does not record tool
-authorizations or update Gate approval stores.
+log write is logged to stderr and never blocks a reply. By default Telegram does not
+record tool authorizations or update Gate approval stores; the opt-in below is the
+only exception.
+
+## Approvals from Telegram (opt-in)
+
+Off by default. Set `TELEGRAM_APPROVALS=1` (or run `fortytwo start
+--telegram-approvals`) on an install where the gate's PreToolUse hook is active,
+and the bridge handles a held action as below. In an installer-managed project,
+`fortytwo gate on` wires the hook and `fortytwo start` then sets the variable for
+you unless you set it yourself.
+
+1. Claude's turn ends with `stop_reason: tool_deferred`. If the gate's approval
+   store has that call staged as `pending`, the bridge sends a card showing the
+   tool and its input (the exact command for Bash) with **Approve** and **Deny**
+   buttons. A deferral the store did not stage keeps the plain notice.
+2. A tap from an authorized chat on the *current* card records `approved` or
+   `denied` in the gate's store, then restarts the chat's Claude process on its
+   saved session with no new input. Claude Code re-runs the held call and the
+   gate's hook allows it exactly once or denies it. The bridge never runs or
+   authorizes the tool itself.
+3. A new message while a request waits counts as "no": the request is denied
+   and the session resumed first, then the message is delivered.
+
+The store is the same file the hook reads for the project (`GATE_APPROVALS`, else
+`<FORTYTWO_ROOT>/.gate/approvals.jsonl`), resolved by the gate's `approvalsPath`.
+`state/bridge-state.json` only remembers which card is waiting. Older cards and
+pre-1.0.0-4 buttons stay inert. A typed "yes" is never an approval: only the
+button on the current card is.
 
 ## Environment
 
@@ -169,6 +198,7 @@ authorizations or update Gate approval stores.
 | `ALLOWED_CHAT_IDS` | no | Comma-separated chat IDs authorized without a binding. Not needed for first pairing: `/login <code>` works with zero bindings. |
 | `CLAUDE_BIN` | no | Path to the `claude` binary (default `claude`). |
 | `FORTYTWO_CLAUDE_ARGS` | no | Extra arguments for every `claude` run, as a JSON array of strings (e.g. `["--chrome"]`). Set by `fortytwo start -- <args>`. A malformed value stops the bridge at boot. |
+| `TELEGRAM_APPROVALS` | no | `1`/`true`/`yes`/`on` lets authorized chats approve or deny actions held by the gate's hook ([details](#approvals-from-telegram-opt-in)). Off by default. |
 | `TELEGRAM_BINDINGS_DB` | no | Path to the self-owned bindings db (default `state/telegram-bindings.db`). |
 | `DB_PATH` | no | Path to the memory DB the bridge opens/migrates at startup (default `db/fortytwo.db`, relative to `FORTYTWO_ROOT`). |
 | `EMBED_MODEL` | no | When set, the bridge uses the Ollama embedder for memory (otherwise a deterministic fallback). |
@@ -233,6 +263,13 @@ Typing is not a turn timeout: silent but active work keeps refreshing, while
 late output cannot restart typing after a result. Once no work is active, the
 bridge sends no further typing refreshes; an action already sent can
 remain visible briefly until Telegram expires it.
+
+## Release notes — 1.0.3
+
+Approval buttons return as an explicit opt-in (`TELEGRAM_APPROVALS`), built on
+the gate's approval store instead of bridge-owned state. Without the setting the
+behaviour described under 1.0.0-4 is unchanged. New exports: `Approvals`,
+`approvalsEnabled`, `formatApprovalRequest`; `ChatSessions.resume()`.
 
 ## Release notes — 1.0.0-4
 

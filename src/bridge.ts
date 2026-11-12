@@ -24,7 +24,7 @@ import { TelegramAdapter } from './adapter.js';
 import { SqliteBindingStore, type BindingStore } from './bindings.js';
 import { envCompat } from './env.js';
 import { handleAuthCommand, isAuthorized, isAuthCommand, type AuthContext } from './login.js';
-import type { SourceKind } from '@justfortytwo/gate'; // peer — provenance SourceKind
+import type { ApprovalStore, SourceKind } from '@justfortytwo/gate'; // provenance SourceKind + the approval-store contract
 import type { DbHandles as MemDbHandles, Embedder as MemEmbedder } from '@justfortytwo/memory';
 import { loadConversationLog, noopConversationLog, toConversationEvent, type ChannelEvent, type ConversationLog } from './conversation-log.js';
 
@@ -131,6 +131,33 @@ export function interpretResult(r: any): Interpreted {
   return out;
 }
 
+// --- opt-in approvals from Telegram ---
+//
+// Off by default: without an injected store a deferral stays a plain notice and
+// nothing in this section runs. With one, the bridge records the owner's decision
+// in the SAME store the gate's PreToolUse hook reads; the hook, not the bridge,
+// still decides whether the call runs (and only once).
+
+/** The part of the gate's approval store the bridge needs. */
+export type Approvals = Pick<ApprovalStore, 'getByToolUseId' | 'setDecisionByToolUseId'>;
+
+/** TELEGRAM_APPROVALS must be an explicit yes; anything else leaves approvals off. */
+export function approvalsEnabled(env: NodeJS.ProcessEnv): boolean {
+  return /^(1|true|yes|on)$/i.test((env['TELEGRAM_APPROVALS'] ?? '').trim());
+}
+
+const APPROVAL_DETAIL_MAX = 1500;
+const APPROVAL_KEYBOARD = { inline_keyboard: [[{ text: '✅ Approve', callback_data: 'gate:approve' }, { text: '❌ Deny', callback_data: 'gate:deny' }]] };
+
+/** What the owner is asked to approve: the exact command for Bash, the tool input otherwise. */
+export function formatApprovalRequest(d: DeferredTool): string {
+  const command = d.name === 'Bash' && typeof d.input['command'] === 'string' ? d.input['command'] as string : undefined;
+  let detail = command ?? JSON.stringify(d.input, null, 2);
+  if (detail.length > APPROVAL_DETAIL_MAX) detail = `${detail.slice(0, APPROVAL_DETAIL_MAX)}\n… (truncated)`;
+  // A fence inside the detail would close the code block early.
+  return `🔐 Approval needed: ${d.name}\n\`\`\`\n${detail.replaceAll('```', "'''")}\n\`\`\``;
+}
+
 export function telegramSourceKind(message: TgMessage): SourceKind {
   if (message.forward_origin || message.forward_from || message.forward_from_chat || message.reply_to_message) return 'quoted_text';
   return 'owner_direct';
@@ -218,7 +245,13 @@ function telegramSourceMeta(message: TgMessage): Record<string, unknown> {
 export interface BridgeState {
   lastUpdateId: number;
   sessions: Record<number, string>;            // recovery only: chatId -> Claude session ID
-  pending?: Record<number, { toolUseId: string; sessionId?: string; toolName?: string; input?: Record<string, unknown> }>; // Legacy approval-card state only; never used to authorize work.
+  /**
+   * chatId -> the approval card waiting for the owner. Written only when approvals
+   * are enabled; `cardMessageId` ties a button tap to the current card. Entries
+   * without it are pre-1.0.0-4 leftovers and are never acted on. This is a pointer
+   * to the request: the decision itself lives in the gate's approval store.
+   */
+  pending?: Record<number, { toolUseId: string; sessionId?: string; toolName?: string; input?: Record<string, unknown>; cardMessageId?: number }>;
 }
 
 function loadState(): BridgeState {
@@ -235,12 +268,12 @@ function saveState(s: BridgeState): void {
 // --- persistent Claude sessions ---
 
 /** `claudeArgs`: extra Claude arguments the operator set for this install (FORTYTWO_CLAUDE_ARGS). */
-export function createBridgeSessions(tg: Telegram, state: BridgeState, h: DbHandles, log: ConversationLog, claudeArgs: readonly string[] = []): ChatSessions {
+export function createBridgeSessions(tg: Telegram, state: BridgeState, h: DbHandles, log: ConversationLog, claudeArgs: readonly string[] = [], approvals?: Approvals): ChatSessions {
   const runner = createRunner({ bin: CLAUDE_BIN, cwd: ROOT, env: { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' }, args: [...claudeArgs] });
   return new ChatSessions(runner, tg, {
     ids: state.sessions,
     persist: () => saveState(state),
-    onResult: (chatId, result, text) => respond(tg, h, log, state, chatId, result, text),
+    onResult: (chatId, result, text) => respond(tg, h, log, state, chatId, result, text, approvals),
   });
 }
 
@@ -264,9 +297,44 @@ async function sendReply(tg: Telegram, chatId: number, placeholderId: number | n
   await tg.sendMessage(chatId, text || '(no reply)');
 }
 
-async function respond(tg: Telegram, h: DbHandles, log: ConversationLog, state: BridgeState, chatId: number, result: RunResult, text: string): Promise<boolean> {
+/**
+ * Ask the owner about a deferred call. Only for a call the approval store has
+ * staged as pending: a deferral from anything else cannot be decided here.
+ * Returns false (caller falls back to the plain notice) when it does not apply.
+ */
+async function requestApproval(tg: Telegram, state: BridgeState, chatId: number, result: RunResult, approvals: Approvals): Promise<boolean> {
+  const { deferred, sessionId } = interpretResult(result.raw);
+  if (!deferred) return false;
+  try {
+    if ((await approvals.getByToolUseId(deferred.id))?.status !== 'pending') return false;
+    const card = await tg.sendMessage(chatId, formatApprovalRequest(deferred), APPROVAL_KEYBOARD);
+    state.pending = { ...state.pending, [chatId]: { toolUseId: deferred.id, sessionId: sessionId ?? state.sessions[chatId], toolName: deferred.name, cardMessageId: card.message_id } };
+    saveState(state);
+    return true;
+  } catch (e: unknown) {
+    console.error(`[bridge] chat ${chatId}: approval request failed: ${(e as Error)?.message ?? e}`);
+    return false;
+  }
+}
+
+/** Record the owner's decision on the chat's waiting request and retire its card. */
+async function decidePending(tg: Telegram, state: BridgeState, chatId: number, approvals: Approvals, status: 'approved' | 'denied'): Promise<{ recorded: boolean; sessionId?: string } | undefined> {
+  const pending = state.pending?.[chatId];
+  if (!pending || pending.cardMessageId === undefined) return undefined;
+  // Forget the card first: a second tap or message must not decide twice.
+  delete state.pending![chatId];
+  saveState(state);
+  const recorded = await approvals.setDecisionByToolUseId(pending.toolUseId, status, `telegram:${chatId}`);
+  const label = !recorded ? 'No longer pending' : status === 'approved' ? '✅ Approved' : '❌ Denied';
+  await tg.editMessageText(chatId, pending.cardMessageId, `${label}: ${pending.toolName ?? 'tool'}`).catch(() => {});
+  console.log(`[bridge] chat ${chatId}: approval ${pending.toolUseId} ${recorded ? status : 'not pending anymore'}`);
+  return { recorded, sessionId: pending.sessionId };
+}
+
+async function respond(tg: Telegram, h: DbHandles, log: ConversationLog, state: BridgeState, chatId: number, result: RunResult, text: string, approvals?: Approvals): Promise<boolean> {
   // A deferral is terminal even when Claude supplies no deferred-tool details.
   if ((result.raw as { stop_reason?: string } | null)?.stop_reason === 'tool_deferred') {
+    if (approvals && await requestApproval(tg, state, chatId, result, approvals)) return true;
     await tg.sendMessage(chatId, 'Claude deferred this action. Telegram cannot authorize it. Resolve it through the configured Claude/Gate approval workflow.');
     return true;
   }
@@ -274,7 +342,7 @@ async function respond(tg: Telegram, h: DbHandles, log: ConversationLog, state: 
   return false;
 }
 
-export async function handleInbound(tg: Telegram, auth: AuthContext, state: BridgeState, h: DbHandles, log: ConversationLog, chatId: number, message: TgMessage, sessions: ChatSessions): Promise<void> {
+export async function handleInbound(tg: Telegram, auth: AuthContext, state: BridgeState, h: DbHandles, log: ConversationLog, chatId: number, message: TgMessage, sessions: ChatSessions, approvals?: Approvals): Promise<void> {
   const text = message.text ?? message.caption ?? '';
 
   // --- AUTH GATE (lockdown) -------------------------------------------------
@@ -345,15 +413,38 @@ export async function handleInbound(tg: Telegram, auth: AuthContext, state: Brid
 
   const prompt = buildInboundPrompt(text, attachments);
   console.log(`[bridge] chat ${chatId}: inbound "${journalContent.slice(0, 50)}" (${attachments.length} att) — waking assistant`);
+  // A new message while a request waits answers it with "no": the request is
+  // denied and the session resumed first, so Claude sees a refusal for that call
+  // (not a retry under a new id) before it reads the message.
+  if (approvals) {
+    const decided = await decidePending(tg, state, chatId, approvals, 'denied');
+    if (decided?.recorded) await sessions.resume(chatId, decided.sessionId);
+  }
   await sessions.send(chatId, prompt);
 }
 
-/** Old approval buttons remain in Telegram history. Never resume or authorize work. */
-export async function handleCallback(tg: Telegram, _state: BridgeState, _h: DbHandles, _log: ConversationLog, _chatId: number, cbId: string, _data: string, _cardMessageId: number, _sessions: ChatSessions): Promise<void> {
-  await tg.answerCallbackQuery(cbId, 'This approval control is no longer supported. No authorization was recorded.').catch(() => {});
+/**
+ * A button tap. Only the current approval card of this chat, with approvals
+ * enabled, decides anything; every other button (older cards, the pre-1.0.0-4
+ * callback format) stays inert and never resumes or authorizes work.
+ */
+export async function handleCallback(tg: Telegram, state: BridgeState, _h: DbHandles, _log: ConversationLog, chatId: number, cbId: string, data: string, cardMessageId: number, sessions: ChatSessions, approvals?: Approvals): Promise<void> {
+  const action = /^gate:(approve|deny)$/.exec(data)?.[1];
+  if (!approvals || !action || state.pending?.[chatId]?.cardMessageId !== cardMessageId) {
+    await tg.answerCallbackQuery(cbId, 'This approval control is no longer supported. No authorization was recorded.').catch(() => {});
+    return;
+  }
+  const status = action === 'approve' ? 'approved' : 'denied';
+  const decided = await decidePending(tg, state, chatId, approvals, status);
+  if (!decided?.recorded) {
+    await tg.answerCallbackQuery(cbId, 'This request is no longer pending. Nothing was changed.').catch(() => {});
+    return;
+  }
+  await tg.answerCallbackQuery(cbId, status === 'approved' ? 'Approved' : 'Denied').catch(() => {});
+  await sessions.resume(chatId, decided.sessionId);
 }
 
-export async function pollLoop(tg: Telegram, auth: AuthContext, state: BridgeState, h: DbHandles, log: ConversationLog, sessions: ChatSessions, signal: AbortSignal): Promise<void> {
+export async function pollLoop(tg: Telegram, auth: AuthContext, state: BridgeState, h: DbHandles, log: ConversationLog, sessions: ChatSessions, signal: AbortSignal, approvals?: Approvals): Promise<void> {
   // Pre-build dedup deps once; null when memory is unavailable (channel-only).
   const replyDeps = makeEnqueueReplyDeps(h);
 
@@ -373,13 +464,13 @@ export async function pollLoop(tg: Telegram, auth: AuthContext, state: BridgeSta
       const chatId = u.message?.chat?.id ?? u.callback_query?.message?.chat?.id;
       if (chatId === undefined) continue;
       // Authorization is enforced inside handleInbound (so /login can pass through).
-      // Legacy callbacks still require Telegram chat authorization.
+      // Button taps require Telegram chat authorization like any message.
       try {
         if (u.message && hasHandleableContent(u.message)) {
-          await handleInbound(tg, auth, state, h, log, chatId, u.message, sessions);
+          await handleInbound(tg, auth, state, h, log, chatId, u.message, sessions, approvals);
         } else if (u.callback_query?.data && u.callback_query.message) {
           if (!isAuthorized(auth, chatId)) { console.log(`[bridge] chat ${chatId}: callback dropped (unbound, lockdown)`); continue; }
-          await handleCallback(tg, state, h, log, chatId, u.callback_query.id, u.callback_query.data, u.callback_query.message.message_id, sessions);
+          await handleCallback(tg, state, h, log, chatId, u.callback_query.id, u.callback_query.data, u.callback_query.message.message_id, sessions, approvals);
         }
       } catch (e: any) {
         if (signal.aborted) break;
@@ -453,12 +544,21 @@ async function main(): Promise<void> {
 
   console.log(`[bridge] up. bootstrap=${bootstrap.size}, bindings=${store.list('telegram').length}, bindingsDb=${BINDINGS_DB_PATH}`);
   // Proactive wakes are now handled by @justfortytwo/scheduler (external daemon).
-  const sessions = createBridgeSessions(tg, state, h, log, claudeArgs);
+  // Opt-in (TELEGRAM_APPROVALS): decide gate deferrals from the chat, through the
+  // same approvals file the gate's PreToolUse hook reads for this project.
+  let approvals: Approvals | undefined;
+  if (approvalsEnabled(process.env)) {
+    const { JsonlApprovalStore, approvalsPath } = await import('@justfortytwo/gate');
+    const path = approvalsPath(ROOT);
+    approvals = new JsonlApprovalStore(path);
+    console.log(`[bridge] approvals from Telegram: on (store=${path})`);
+  }
+  const sessions = createBridgeSessions(tg, state, h, log, claudeArgs, approvals);
   const controller = new AbortController();
   const shutdown = () => { controller.abort(); void sessions.closeAll(); };
   process.once('SIGINT', shutdown);
   process.once('SIGTERM', shutdown);
-  try { await pollLoop(tg, auth, state, h, log, sessions, controller.signal); }
+  try { await pollLoop(tg, auth, state, h, log, sessions, controller.signal, approvals); }
   finally {
     controller.abort();
     await sessions.closeAll();

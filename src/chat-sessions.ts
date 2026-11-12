@@ -218,6 +218,19 @@ export class ChatSessions {
     }
   }
 
+  /**
+   * Restart the chat's Claude process on its saved session with no new input.
+   * Claude Code then re-runs the tool call it deferred, which is how a decision
+   * recorded out of band takes effect; a message sent into the live process would
+   * only make Claude retry under a new tool-use id and be deferred again.
+   */
+  async resume(chatId: number, fallbackId?: string): Promise<void> {
+    if (!(this.hooks.ids[chatId] ?? fallbackId)) throw new Error('No saved Claude session to resume');
+    await this.close(chatId);
+    const chat = await this.getOrCreate(chatId, fallbackId);
+    this.activate(chatId, chat);
+  }
+
   /** Wait for already queued Telegram delivery, never for a Claude result. */
   async drain(chatId: number): Promise<void> { await (await this.chats.get(chatId))?.delivery; }
 
