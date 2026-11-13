@@ -273,6 +273,7 @@ Approval buttons return as an explicit opt-in (`TELEGRAM_APPROVALS`), built on
 the gate's approval store instead of bridge-owned state. Without the setting the
 behaviour described under 1.0.0-4 is unchanged. New exports: `Approvals`,
 `approvalsEnabled`, `formatApprovalRequest`; `ChatSessions.resume()`.
+Depends on `@justfortytwo/gate` 1.x (`approvalsPath`).
 
 ## Release notes — 1.0.0-4
 
