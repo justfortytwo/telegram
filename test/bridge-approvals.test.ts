@@ -66,15 +66,27 @@ describe('formatApprovalRequest', () => {
     expect(formatApprovalRequest({ id: 't', name: 'Bash', input: { command: 'git push' } })).toBe('🔐 Approval needed: Bash\n```\ngit push\n```');
     expect(formatApprovalRequest({ id: 't', name: 'Write', input: { file_path: 'a.txt' } })).toContain('"file_path": "a.txt"');
   });
-  it('truncates a very long input and keeps a fence inside it from closing the block', () => {
-    const text = formatApprovalRequest({ id: 't', name: 'Bash', input: { command: 'x'.repeat(5000) + '```' } });
-    expect(text.length).toBeLessThan(1700);
-    expect(text).toContain('… (truncated)');
-    expect(text.split('```')).toHaveLength(3);
+  it('refuses to show an input it cannot show whole and unaltered', () => {
+    expect(formatApprovalRequest({ id: 't', name: 'Bash', input: { command: 'x'.repeat(3501) } })).toBeNull();
+    expect(formatApprovalRequest({ id: 't', name: 'Bash', input: { command: 'echo ```' } })).toBeNull();
+    expect(formatApprovalRequest({ id: 't', name: 'Bash', input: { command: 'x'.repeat(3500) } })).toContain('x'.repeat(3500));
   });
 });
 
 describe('approvals from Telegram', () => {
+  it('offers no buttons when the input is too long to show in full', async () => {
+    const f = await setup();
+    await f.inbound('do it');
+    f.sessions[0]!.sessionId = 'sid-1';
+    f.sessions[0]!.result('', { stop_reason: 'tool_deferred', deferred_tool_use: { id: 'toolu_1', name: 'Bash', input: { command: 'x'.repeat(4000) } } });
+    await f.manager.drain(1);
+    expect(f.tg.sendMessage).toHaveBeenCalledTimes(1);
+    const [, text, keyboard] = f.tg.sendMessage.mock.calls[0];
+    expect(text).toMatch(/too long to show in full/);
+    expect(keyboard).toBeUndefined();
+    expect(f.state.pending?.[1]).toBeUndefined();
+    expect(await f.status()).toBe('pending');
+  });
   it('turns a staged deferral into an Approve/Deny card and remembers it', async () => {
     const f = await setup(); await f.defer();
     expect(f.tg.sendMessage).toHaveBeenCalledTimes(1);

@@ -176,6 +176,9 @@ you unless you set it yourself.
    store has that call staged as `pending`, the bridge sends a card showing the
    tool and its input (the exact command for Bash) with **Approve** and **Deny**
    buttons. A deferral the store did not stage keeps the plain notice.
+   The input is always shown whole: one longer than 3500 characters, or one
+   containing a code fence, gets a notice without buttons and is decided on the
+   host with `npx fortytwo-gate`.
 2. A tap from an authorized chat on the *current* card records `approved` or
    `denied` in the gate's store, then restarts the chat's Claude process on its
    saved session with no new input. Claude Code re-runs the held call and the

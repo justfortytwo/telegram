@@ -146,16 +146,20 @@ export function approvalsEnabled(env: NodeJS.ProcessEnv): boolean {
   return /^(1|true|yes|on)$/i.test((env['TELEGRAM_APPROVALS'] ?? '').trim());
 }
 
-const APPROVAL_DETAIL_MAX = 1500;
+// Below Telegram's 4096-character message limit, with room for the header.
+const APPROVAL_DETAIL_MAX = 3500;
 const APPROVAL_KEYBOARD = { inline_keyboard: [[{ text: '✅ Approve', callback_data: 'gate:approve' }, { text: '❌ Deny', callback_data: 'gate:deny' }]] };
 
-/** What the owner is asked to approve: the exact command for Bash, the tool input otherwise. */
-export function formatApprovalRequest(d: DeferredTool): string {
+/**
+ * What the owner is asked to approve: the exact command for Bash, the tool input
+ * otherwise. Null when it cannot be shown whole and unaltered (too long, or it
+ * contains a code fence): an approval must never be asked on partial content.
+ */
+export function formatApprovalRequest(d: DeferredTool): string | null {
   const command = d.name === 'Bash' && typeof d.input['command'] === 'string' ? d.input['command'] as string : undefined;
-  let detail = command ?? JSON.stringify(d.input, null, 2);
-  if (detail.length > APPROVAL_DETAIL_MAX) detail = `${detail.slice(0, APPROVAL_DETAIL_MAX)}\n… (truncated)`;
-  // A fence inside the detail would close the code block early.
-  return `🔐 Approval needed: ${d.name}\n\`\`\`\n${detail.replaceAll('```', "'''")}\n\`\`\``;
+  const detail = command ?? JSON.stringify(d.input, null, 2);
+  if (detail.length > APPROVAL_DETAIL_MAX || detail.includes('```')) return null;
+  return `🔐 Approval needed: ${d.name}\n\`\`\`\n${detail}\n\`\`\``;
 }
 
 export function telegramSourceKind(message: TgMessage): SourceKind {
@@ -307,7 +311,13 @@ async function requestApproval(tg: Telegram, state: BridgeState, chatId: number,
   if (!deferred) return false;
   try {
     if ((await approvals.getByToolUseId(deferred.id))?.status !== 'pending') return false;
-    const card = await tg.sendMessage(chatId, formatApprovalRequest(deferred), APPROVAL_KEYBOARD);
+    const text = formatApprovalRequest(deferred);
+    if (text === null) {
+      // No buttons: the owner would be deciding on something they cannot read here.
+      await tg.sendMessage(chatId, `🔐 ${deferred.name} is waiting for approval, but its input is too long to show in full here, so it cannot be approved from Telegram. Nothing was run. Review it on the host with \`npx fortytwo-gate list\`.`);
+      return true;
+    }
+    const card = await tg.sendMessage(chatId, text, APPROVAL_KEYBOARD);
     state.pending = { ...state.pending, [chatId]: { toolUseId: deferred.id, sessionId: sessionId ?? state.sessions[chatId], toolName: deferred.name, cardMessageId: card.message_id } };
     saveState(state);
     return true;
