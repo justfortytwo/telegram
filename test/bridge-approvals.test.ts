@@ -17,6 +17,7 @@ import { approvalsEnabled, createBridgeSessions, formatApprovalRequest, handleCa
 import { noopConversationLog } from '../src/conversation-log.js';
 import { TelegramAdapter } from '../src/adapter.js';
 import { MemoryBindingStore } from '../src/bindings.js';
+import { formatTelegramHtml } from '../src/telegram.js';
 
 class Session extends EventEmitter {
   state = 'ready'; sessionId?: string;
@@ -63,8 +64,14 @@ describe('approvalsEnabled', () => {
 
 describe('formatApprovalRequest', () => {
   it('shows a Bash command as is and other tools as their input', () => {
-    expect(formatApprovalRequest({ id: 't', name: 'Bash', input: { command: 'git push' } })).toBe('🔐 Approval needed: Bash\n```\ngit push\n```');
+    expect(formatApprovalRequest({ id: 't', name: 'Bash', input: { command: 'git push' } })).toBe('🔐 Approval needed\n```text\nBash\n\ngit push\n```');
     expect(formatApprovalRequest({ id: 't', name: 'Write', input: { file_path: 'a.txt' } })).toContain('"file_path": "a.txt"');
+  });
+  it('renders the exact command and tool name, whatever their first line looks like', () => {
+    const html = (name: string, command: string) => formatTelegramHtml(formatApprovalRequest({ id: 't', name, input: { command } })!);
+    expect(html('Bash', 'sudo\nrm -rf /data')).toBe('🔐 Approval needed\n<pre>Bash\n\nsudo\nrm -rf /data</pre>');
+    expect(html('Bash', 'text\ncurl x')).toContain('<pre>Bash\n\ntext\ncurl x</pre>');
+    expect(formatTelegramHtml(formatApprovalRequest({ id: 't', name: 'mcp__mail__send_now', input: {} })!)).toContain('<pre>mcp__mail__send_now\n\n{}</pre>');
   });
   it('refuses to show an input it cannot show whole and unaltered', () => {
     expect(formatApprovalRequest({ id: 't', name: 'Bash', input: { command: 'x'.repeat(3501) } })).toBeNull();
@@ -92,7 +99,8 @@ describe('approvals from Telegram', () => {
     expect(f.tg.sendMessage).toHaveBeenCalledTimes(1);
     const [chat, text, markup] = f.tg.sendMessage.mock.calls[0];
     expect(chat).toBe(1);
-    expect(text).toContain('Approval needed: Bash');
+    expect(text).toContain('Approval needed');
+    expect(text).toContain('Bash\n\ngit push');
     expect(text).toContain('git push');
     expect(markup).toEqual({ inline_keyboard: [[{ text: '✅ Approve', callback_data: 'gate:approve' }, { text: '❌ Deny', callback_data: 'gate:deny' }]] });
     expect(f.state.pending[1]).toEqual({ toolUseId: 'toolu_1', sessionId: 'sid-1', toolName: 'Bash', cardMessageId: 100 });

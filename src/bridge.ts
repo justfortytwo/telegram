@@ -159,7 +159,11 @@ export function formatApprovalRequest(d: DeferredTool): string | null {
   const command = d.name === 'Bash' && typeof d.input['command'] === 'string' ? d.input['command'] as string : undefined;
   const detail = command ?? JSON.stringify(d.input, null, 2);
   if (detail.length > APPROVAL_DETAIL_MAX || detail.includes('```')) return null;
-  return `🔐 Approval needed: ${d.name}\n\`\`\`\n${detail}\n\`\`\``;
+  // The tool name and the detail go inside one block with an explicit language
+  // tag: the HTML formatter drops a first line that looks like a tag (it would
+  // eat a command's own first line, e.g. "sudo") and applies markdown outside a
+  // block (it would restyle the underscores of an MCP tool name).
+  return `🔐 Approval needed\n\`\`\`text\n${d.name}\n\n${detail}\n\`\`\``;
 }
 
 export function telegramSourceKind(message: TgMessage): SourceKind {
