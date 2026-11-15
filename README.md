@@ -267,6 +267,17 @@ late output cannot restart typing after a result. Once no work is active, the
 bridge sends no further typing refreshes; an action already sent can
 remain visible briefly until Telegram expires it.
 
+## Release notes — 1.0.4
+
+A reply to an earlier message now carries that message's text to the assistant.
+Telegram shows the replied-to message above the reply, so the owner writes as if
+the assistant could see it; before this the bridge sent only the new text. This
+matters most for messages from scheduled jobs, which reach the chat from another
+session and are not in the chat's conversation. The quoted text (or the part the
+owner selected) is put in front of the reply, marked as context and not as new
+instructions, and cut at 4000 characters. New exports: `withQuotedReply`,
+`QUOTED_REPLY_MAX`.
+
 ## Release notes — 1.0.3
 
 Approval buttons return as an explicit opt-in (`TELEGRAM_APPROVALS`), built on

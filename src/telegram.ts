@@ -74,6 +74,8 @@ export interface TgMessage {
   forward_from?: unknown;
   forward_from_chat?: unknown;
   reply_to_message?: TgMessage;
+  /** The part of the replied-to message the sender selected, when they quoted only a part. */
+  quote?: { text?: string };
 }
 
 export interface TgUpdate {

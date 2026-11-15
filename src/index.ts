@@ -81,6 +81,8 @@ export {
   hasHandleableContent,
   telegramCommandReply,
   buildInboundPrompt,
+  withQuotedReply,
+  QUOTED_REPLY_MAX,
   ingestMessageAttachments,
   approvalsEnabled,
   formatApprovalRequest,
