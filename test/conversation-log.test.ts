@@ -34,4 +34,15 @@ describe('loadConversationLog', () => {
     expect(prepareTranscript).toHaveBeenCalledWith(h);
     expect(createTranscript).toHaveBeenCalledWith(h, emb);
   });
+  it('adds a reader for scheduled messages when the module has the cursor API', async () => {
+    const created = { append: vi.fn(async () => 1) };
+    const log = await loadConversationLog({}, {}, async () => ({
+      prepareTranscript: async () => {}, createTranscript: () => created,
+      transcriptHead: () => ({ database: 'd', position: 3 }),
+      transcriptDelta: () => ({ cursor: { database: 'd', position: 3 }, entries: [] }),
+    }));
+    await log.append({ channel: 'telegram', direction: 'inbound', actor: 'owner', kind: 'message', content: 'x' });
+    expect(created.append).toHaveBeenCalledTimes(1);
+    expect(log.scheduledSince?.(undefined)).toEqual({ cursor: { database: 'd', position: 3 }, messages: [] });
+  });
 });

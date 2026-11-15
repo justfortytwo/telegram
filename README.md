@@ -267,6 +267,21 @@ late output cannot restart typing after a result. Once no work is active, the
 bridge sends no further typing refreshes; an action already sent can
 remain visible briefly until Telegram expires it.
 
+## Release notes — 1.0.5
+
+The chat's session now learns what scheduled jobs told the owner. A briefing or
+a weekly review reaches the chat from the scheduler's own run, so the chat's
+session never saw it and could not make sense of an answer such as "approve 1
+and 2". On each inbound message the bridge reads the scheduler's messages logged
+since the owner's previous message in that chat (conversation log, channel
+`scheduler`) and puts them in front of the message, marked as context and not as
+new instructions. Each message is passed once per chat; at most the latest 5,
+each cut at 3000 characters. The position is kept per chat in
+`state/bridge-state.json` (`scheduledSeen`); a chat's first message after this
+update only sets the position. Needs `@justfortytwo/transcript`; without it
+nothing changes. New exports: `withScheduledMessages`, `takeScheduledMessages`,
+`scheduledReader`, `SCHEDULED_CONTEXT_MAX`, `SCHEDULED_MESSAGE_MAX`.
+
 ## Release notes — 1.0.4
 
 A reply to an earlier message now carries that message's text to the assistant.

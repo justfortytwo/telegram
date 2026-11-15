@@ -78,7 +78,11 @@ reusable workflow `justfortytwo/.github/.github/workflows/node-ci.yml@main` with
   structural `ConversationLog` port (`src/conversation-log.ts`). `loadConversationLog`
   dynamically imports the optional peer `@justfortytwo/transcript` (`prepareTranscript`,
   `createTranscript`) and falls back to a no-op. No transcript or memory types are imported
-  for this. A failing `append` is logged to stderr and never blocks a reply. Chat is no
+  for this. A failing `append` is logged to stderr and never blocks a reply. The same port
+  reads back what scheduled jobs told the owner (`scheduledSince`, over transcript's
+  `transcriptHead`/`transcriptDelta`): `handleInbound` puts those messages in front of the
+  owner's next message, once per chat (`state.scheduledSeen`), because the chat's session
+  never saw them. Chat is no
   longer stored as memories. `@justfortytwo/gate`
   is a regular dependency because `attachments.ts` imports `createSourceEnvelope` at runtime.
 - **`// TODO(wire):` markers** mark seams still stubbed locally: the gate's exact-command
