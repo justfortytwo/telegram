@@ -71,9 +71,13 @@ reusable workflow `justfortytwo/.github/.github/workflows/node-ci.yml@main` with
 
 - **Memory is optional; gate is a dependency.** `@justfortytwo/memory` is an optional
   `peerDependency` (plus a devDependency for types/tests). The bridge loads it dynamically
-  (`loadMemoryEngine`) for the reply queue (`enqueue` / `existsPending`) and to open the DB; if
-  it is absent or fails to open, it runs **channel-only** (relays, records nothing). Only
-  types are imported statically from memory.
+  (`loadMemoryEngine`) to open and migrate the DB; if it is absent or fails to open, it runs
+  **channel-only** (relays, records nothing). Only types are imported statically from memory.
+- **The reply queue's job API comes from the scheduler.** The jobs table and `enqueue` /
+  `existsPending` belong to `@justfortytwo/scheduler`. `loadReplyQueue` (`notify.ts`) imports it
+  dynamically and structurally (no package.json entry, no static import), runs
+  `runSchedulerMigrations(h.k)` after memory's migrations, and binds the two functions to the
+  handle. Without a scheduler that has the job API, the queue is off (null deps).
 - **Conversation log, not memory.** Every inbound/outbound event is written through the
   structural `ConversationLog` port (`src/conversation-log.ts`). `loadConversationLog`
   dynamically imports the optional peer `@justfortytwo/transcript` (`prepareTranscript`,
@@ -95,7 +99,7 @@ reusable workflow `justfortytwo/.github/.github/workflows/node-ci.yml@main` with
   is redeemable by the running bridge. Keep that file path/schema compatible with
   `../installer/src/commands/pair.ts`.
 - `ChannelAdapter` (`adapter.ts`) is intentionally channel-agnostic for future adapters.
-- `notify.ts` duck-types scheduler's `Notifier`; do not add a scheduler dependency.
+- `notify.ts` duck-types scheduler's `Notifier` and job API; do not add a scheduler dependency.
 - Paths resolve from `FORTYTWO_ROOT` (fallback `FORD_ROOT`, else the package root):
   `config/adapters.toml`, `state/bridge-state.json`, `state/telegram-bindings.db`,
   `db/fortytwo.db` (`DB_PATH`). See README for the full env table.

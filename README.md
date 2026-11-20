@@ -144,8 +144,9 @@ dynamically, and it is also a devDependency so types and tests resolve.
 
 | Package | Used for | Contract |
 | --- | --- | --- |
-| `@justfortytwo/memory` | Memory store, jobs, embeddings | `MEMORY_TOOL_CONTRACT_VERSION` (tools `mcp__fortytwo-memory__*`) |
+| `@justfortytwo/memory` | Opens + migrates the DB, embeddings | `MEMORY_TOOL_CONTRACT_VERSION` (tools `mcp__fortytwo-memory__*`) |
 | `@justfortytwo/transcript` | Conversation log (every inbound/outbound message) | `prepareTranscript`, `createTranscript` |
+| `@justfortytwo/scheduler` | Reply queue: jobs table and job API (loaded dynamically, not declared) | `runSchedulerMigrations`, `enqueue`, `existsPending` |
 | `@justfortytwo/gate` | Provenance envelopes (policy hook configured separately) | `POLICY_SCHEMA_VERSION` |
 
 Install memory alongside this package to enable persistence:
@@ -155,11 +156,16 @@ npm install @justfortytwo/telegram @justfortytwo/memory @justfortytwo/transcript
 ```
 
 The **memory** data path is wired: the bridge opens + migrates the memory DB at
-startup (used for the reply queue) and **writes each channel event** through
+startup and **writes each channel event** through
 `@justfortytwo/transcript`'s conversation log; chat is no longer stored as memories.
 Recall happens inside the headless `claude` turn via the Memory MCP tools. If the
 memory or transcript peer is absent, the bridge degrades to **channel-only**
-(messages relay but are not recorded) rather than refusing to start. A failing
+(messages relay but are not recorded) rather than refusing to start. The reply
+queue (a reply that could not be delivered inline, left for the scheduler) needs
+memory and `@justfortytwo/scheduler`, which owns the jobs table: the bridge runs
+the scheduler's `runSchedulerMigrations` after memory's migrations and uses its
+`enqueue`/`existsPending`. Without the scheduler, or with one older than the job
+API, such replies are dropped and the bridge says so on stderr. A failing
 log write is logged to stderr and never blocks a reply. By default Telegram does not
 record tool authorizations or update Gate approval stores; the opt-in below is the
 only exception.
