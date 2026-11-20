@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 
 import { claudeArgsFromEnv, createRunner, type RunResult } from '@justfortytwo/runner';
 import { ChatSessions } from './chat-sessions.js';
-import { enqueueReply, type EnqueueReplyDeps } from './notify.js';
+import { enqueueReply, loadReplyQueue, type EnqueueReplyDeps } from './notify.js';
 
 import { Telegram, parseAllowed, messageAttachmentSpecs, type TgMessage, type TgUpdate, type AttachmentSpec } from './telegram.js';
 import { buildAttachment, inboxRelPath, withinSizeLimit, extensionFor, type Attachment } from './attachments.js';
@@ -32,30 +32,30 @@ import { loadConversationLog, noopConversationLog, toConversationEvent, type Cha
 // PEER PACKAGE SEAMS — stubbed. Replace each block with the real peer import.
 // ---------------------------------------------------------------------------
 
-// @justfortytwo/memory is an OPTIONAL peer used here only for reply-queue jobs
-// (enqueue / existsPending) and to open the DB handed to the conversation log.
+// @justfortytwo/memory is an OPTIONAL peer used here to open and migrate the DB
+// handed to the conversation log and to the reply queue. The reply queue's job
+// API (enqueue / existsPending) and the jobs table belong to the optional peer
+// @justfortytwo/scheduler (see loadReplyQueue in notify.ts).
 // Channel events are NOT stored as memories: they are written through the
 // ConversationLog port (see conversation-log.ts). When memory is absent or fails
 // to open, the bridge runs CHANNEL-ONLY (relays messages, records nothing).
 type DbHandles = MemDbHandles | null;
 type Embedder = MemEmbedder | null;
 
-// memory job helpers, captured when the peer is present.
-let memEnqueue: ((h: MemDbHandles, j: { kind: string; run_at: string; payload?: unknown }) => number) | null = null;
-let memExistsPending: ((h: MemDbHandles, kind: string, idValue: number) => boolean) | null = null;
+// Reply queue bound to the DB handle, captured when memory and scheduler are present.
+let replyQueue: EnqueueReplyDeps | null = null;
 
 /**
- * Load the optional memory engine: open + migrate the DB and build an embedder
- * (Ollama when EMBED_MODEL is set, else a deterministic fake). Returns null
- * handles when memory is not installed or fails to open — the bridge then runs
- * channel-only rather than refusing to start.
+ * Load the optional memory engine: open + migrate the DB (memory's migrations,
+ * then the scheduler's jobs table when the scheduler is installed) and build an
+ * embedder (Ollama when EMBED_MODEL is set, else a deterministic fake). Returns
+ * null handles when memory is not installed or fails to open — the bridge then
+ * runs channel-only rather than refusing to start.
  */
 export async function loadMemoryEngine(dbPath: string): Promise<{ h: DbHandles; embedder: Embedder }> {
   type MemModule = {
     openDb: (p: string) => MemDbHandles & { k: unknown };
     runMigrations: (k: unknown) => Promise<void>;
-    enqueue: (h: MemDbHandles, j: { kind: string; run_at: string; payload?: unknown }) => number;
-    existsPending: (h: MemDbHandles, kind: string, idValue: number) => boolean;
     FakeEmbedder: new () => MemEmbedder;
     OllamaEmbedder: new (model: string, baseUrl?: string) => MemEmbedder;
   };
@@ -74,8 +74,7 @@ export async function loadMemoryEngine(dbPath: string): Promise<{ h: DbHandles; 
     const embedder: MemEmbedder = embedModel
       ? new mod.OllamaEmbedder(embedModel, process.env.OLLAMA_BASE_URL)
       : new mod.FakeEmbedder();
-    memEnqueue = mod.enqueue;
-    memExistsPending = mod.existsPending;
+    replyQueue = await loadReplyQueue(h);
     console.log(`[bridge] memory wired (db=${dbPath}, embedder=${embedModel ? 'ollama:' + embedModel : 'fake'}).`);
     return { h, embedder };
   } catch (e: unknown) {
@@ -85,8 +84,8 @@ export async function loadMemoryEngine(dbPath: string): Promise<{ h: DbHandles; 
 }
 
 /**
- * Build an EnqueueReplyDeps bound to the bridge's memory handle.
- * Returns null when memory is not wired (channel-only mode).
+ * The reply queue bound to the bridge's DB handle.
+ * Returns null when memory or the scheduler's job API is not wired.
  *
  * FLAG: the trigger condition for enqueueReply is best-effort. The bridge
  * does not have a hard "busy/unreachable" state — it's used here in the
@@ -94,13 +93,7 @@ export async function loadMemoryEngine(dbPath: string): Promise<{ h: DbHandles; 
  * scheduler can drain it later. The dedup + DI is the primary deliverable.
  */
 function makeEnqueueReplyDeps(h: DbHandles): EnqueueReplyDeps | null {
-  if (!h || !memEnqueue || !memExistsPending) return null;
-  const boundEnqueue = memEnqueue.bind(null, h);
-  const boundExistsPending = memExistsPending.bind(null, h);
-  return {
-    enqueue: (j) => boundEnqueue(j),
-    existsPending: (kind, id) => boundExistsPending(kind, id),
-  };
+  return h ? replyQueue : null;
 }
 
 // ---------------------------------------------------------------------------

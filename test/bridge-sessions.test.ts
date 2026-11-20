@@ -5,7 +5,7 @@ vi.mock('@justfortytwo/runner', () => ({ createRunner: mocks.createRunner }));
 vi.mock('node:fs', async importOriginal => ({ ...await importOriginal<typeof import('node:fs')>(), writeFileSync: mocks.write, mkdirSync: vi.fn() }));
 vi.mock('@justfortytwo/memory', () => ({
   openDb: () => ({ k: {} }), runMigrations: async () => {}, store: mocks.store,
-  FakeEmbedder: class {}, enqueue: vi.fn(), existsPending: vi.fn(),
+  FakeEmbedder: class {},
 }));
 import { createBridgeSessions, handleInbound, handleCallback, pollLoop, ingestMessageAttachments, hasHandleableContent } from '../src/bridge.js';
 import { noopConversationLog, type ConversationEvent, type ConversationLog } from '../src/conversation-log.js';
