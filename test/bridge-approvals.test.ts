@@ -10,7 +10,7 @@ vi.mock('@justfortytwo/runner', () => ({ createRunner: mocks.createRunner }));
 vi.mock('node:fs', async importOriginal => ({ ...await importOriginal<typeof import('node:fs')>(), writeFileSync: mocks.write, mkdirSync: vi.fn() }));
 vi.mock('@justfortytwo/memory', () => ({
   openDb: () => ({ k: {} }), runMigrations: async () => {}, store: vi.fn(async () => 1),
-  FakeEmbedder: class {}, enqueue: vi.fn(), existsPending: vi.fn(),
+  FakeEmbedder: class {},
 }));
 import { InMemoryApprovalStore } from '@justfortytwo/gate';
 import { approvalsEnabled, createBridgeSessions, formatApprovalRequest, handleCallback, handleInbound } from '../src/bridge.js';
