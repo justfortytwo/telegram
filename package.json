@@ -1,6 +1,6 @@
 {
   "name": "@justfortytwo/telegram",
-  "version": "1.0.5",
+  "version": "1.1.0",
   "description": "Telegram channel adapter for fortytwo: persistent Claude Code sessions per chat, asynchronous replies, deferred-action notices, and login/pairing authorization.",
   "license": "MIT",
   "author": {
@@ -49,11 +49,15 @@
     "login"
   ],
   "peerDependencies": {
-    "@justfortytwo/memory": "^0.1.5 || ^1.0.0",
+    "@justfortytwo/memory": "^0.1.5 || ^1.0.0 || ^2.0.0",
+    "@justfortytwo/scheduler": "^2.0.0",
     "@justfortytwo/transcript": "^1.0.0"
   },
   "peerDependenciesMeta": {
     "@justfortytwo/memory": {
+      "optional": true
+    },
+    "@justfortytwo/scheduler": {
       "optional": true
     },
     "@justfortytwo/transcript": {
@@ -66,7 +70,7 @@
     "better-sqlite3": "^12.0.0"
   },
   "devDependencies": {
-    "@justfortytwo/memory": "1.0.1",
+    "@justfortytwo/memory": "2.0.0",
     "@types/better-sqlite3": "^7.6.0",
     "@types/node": "^20.0.0",
     "typescript": "^5.4.0",
