@@ -7,7 +7,7 @@ vi.mock('@justfortytwo/memory', () => ({
   openDb: () => ({ k: {} }), runMigrations: async () => {}, store: mocks.store,
   FakeEmbedder: class {},
 }));
-import { createBridgeSessions, handleInbound, handleCallback, pollLoop, ingestMessageAttachments, hasHandleableContent } from '../src/bridge.js';
+import { TELEGRAM_OUTPUT_PROMPT, withTelegramOutputPrompt, createBridgeSessions, handleInbound, handleCallback, pollLoop, ingestMessageAttachments, hasHandleableContent } from '../src/bridge.js';
 import { noopConversationLog, type ConversationEvent, type ConversationLog } from '../src/conversation-log.js';
 import { TelegramAdapter } from '../src/adapter.js';
 import { MemoryBindingStore } from '../src/bindings.js';
@@ -38,12 +38,21 @@ beforeEach(() => vi.clearAllMocks());
 afterEach(async () => { await Promise.all(managers.splice(0).map(m => m.closeAll())); });
 
 describe('bridge dispatch', () => {
-  it('passes operator Claude arguments to the runner, and none by default', () => {
+  it('passes operator Claude arguments to the runner, plus the Telegram output note', () => {
     setup();
-    expect(mocks.createRunner.mock.calls[0][0].args).toEqual([]);
+    expect(mocks.createRunner.mock.calls[0][0].args).toEqual(['--append-system-prompt', TELEGRAM_OUTPUT_PROMPT]);
     const tg: any = {}; const state = { sessions: {}, lastUpdateId: 0 };
     managers.push(createBridgeSessions(tg, state, null, noopConversationLog, ['--chrome']));
-    expect(mocks.createRunner.mock.calls[1][0].args).toEqual(['--chrome']);
+    expect(mocks.createRunner.mock.calls[1][0].args).toEqual(['--chrome', '--append-system-prompt', TELEGRAM_OUTPUT_PROMPT]);
+  });
+  it('extends an operator --append-system-prompt instead of replacing it', () => {
+    expect(withTelegramOutputPrompt(['--append-system-prompt', 'be brief', '--chrome']))
+      .toEqual(['--append-system-prompt', `be brief\n\n${TELEGRAM_OUTPUT_PROMPT}`, '--chrome']);
+    expect(withTelegramOutputPrompt(['--append-system-prompt=be brief']))
+      .toEqual([`--append-system-prompt=be brief\n\n${TELEGRAM_OUTPUT_PROMPT}`]);
+    const input = ['--chrome'];
+    withTelegramOutputPrompt(input);
+    expect(input).toEqual(['--chrome']);
   });
   it('polls and dispatches B before result A, including across getUpdates calls', async () => {
     const f = setup(); const abort = new AbortController();
@@ -140,7 +149,7 @@ describe('bridge dispatch', () => {
     const before = process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY;
     process.env.FORTYTWO_TURN_TIMEOUT = '1'; process.env.FORD_TURN_TIMEOUT = '2';
     setup();
-    expect(mocks.createRunner).toHaveBeenCalledWith({ bin: expect.any(String), cwd: expect.any(String), env: { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' }, args: [] });
+    expect(mocks.createRunner).toHaveBeenCalledWith({ bin: expect.any(String), cwd: expect.any(String), env: { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' }, args: ['--append-system-prompt', TELEGRAM_OUTPUT_PROMPT] });
     expect(process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY).toBe(before);
     delete process.env.FORTYTWO_TURN_TIMEOUT; delete process.env.FORD_TURN_TIMEOUT;
   });

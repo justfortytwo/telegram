@@ -347,9 +347,31 @@ function saveState(s: BridgeState): void {
 
 // --- persistent Claude sessions ---
 
+export const TELEGRAM_OUTPUT_PROMPT =
+  'Output channel: Telegram. Do not use Markdown tables in chat replies. Use compact, readable lists instead. This does not apply to files.';
+
+/**
+ * Adds the Telegram output note to the operator's Claude arguments. Claude keeps
+ * only the last `--append-system-prompt`, so an operator value is extended, not replaced.
+ */
+export function withTelegramOutputPrompt(claudeArgs: readonly string[]): string[] {
+  const args = [...claudeArgs];
+  for (let i = args.length - 1; i >= 0; i--) {
+    if (args[i] === '--append-system-prompt' && i + 1 < args.length) {
+      args[i + 1] = `${args[i + 1]}\n\n${TELEGRAM_OUTPUT_PROMPT}`;
+      return args;
+    }
+    if (args[i].startsWith('--append-system-prompt=')) {
+      args[i] = `${args[i]}\n\n${TELEGRAM_OUTPUT_PROMPT}`;
+      return args;
+    }
+  }
+  return [...args, '--append-system-prompt', TELEGRAM_OUTPUT_PROMPT];
+}
+
 /** `claudeArgs`: extra Claude arguments the operator set for this install (FORTYTWO_CLAUDE_ARGS). */
 export function createBridgeSessions(tg: Telegram, state: BridgeState, h: DbHandles, log: ConversationLog, claudeArgs: readonly string[] = [], approvals?: Approvals): ChatSessions {
-  const runner = createRunner({ bin: CLAUDE_BIN, cwd: ROOT, env: { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' }, args: [...claudeArgs] });
+  const runner = createRunner({ bin: CLAUDE_BIN, cwd: ROOT, env: { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' }, args: withTelegramOutputPrompt(claudeArgs) });
   return new ChatSessions(runner, tg, {
     ids: state.sessions,
     persist: () => saveState(state),
