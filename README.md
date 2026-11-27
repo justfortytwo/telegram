@@ -33,9 +33,10 @@ The bridge owns the chat-to-session mapping. Runner owns the Claude process and
 stream-json transport; Claude Code owns the agent. Telegram makes no provider or
 model decisions. The runner inherits process configuration and receives
 `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` explicitly, without changing `process.env`.
-It also appends a short output note to the system prompt: no Markdown tables in
-chat replies, compact lists instead (files are unaffected). An operator
-`--append-system-prompt` in `FORTYTWO_CLAUDE_ARGS` is kept, with the note added after it.
+The bridge also appends a short output note to the system prompt that asks for
+compact lists instead of Markdown tables in chat replies; files Claude writes are
+not affected. If the operator sets `--append-system-prompt` in
+`FORTYTWO_CLAUDE_ARGS`, the bridge keeps that value and adds the note after it.
 Persistent sessions have no default wall-clock turn timeout.
 
 Claude stays alive between messages. When runner exposes a session ID, the bridge
